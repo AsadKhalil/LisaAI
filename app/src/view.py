@@ -377,13 +377,13 @@ async def change_user_role_admin(current_user: Annotated[Any, Depends(get_curren
 
 
 @router.post("/create_knowledge_base")
-async def create_knowledge_base(files: Annotated[List[UploadFile], File()], current_user: Annotated[Any, Depends(get_current_user)]):
+async def create_knowledge_base(files: Annotated[List[UploadFile], File()]):
     """route definition for creation of a new knowledge base with multiple file upload"""
     try:
-        if current_user.custom_claims.get('local_id') is not None:
-            user_id = current_user.custom_claims.get('local_id')
-            logger.info(f"Current user's local id: {user_id}")
-
+        # if current_user.custom_claims.get('local_id') is not None:
+        #     user_id = current_user.custom_claims.get('local_id')
+        #     logger.info(f"Current user's local id: {user_id}")
+        user_id = 1
         logger.info(type(files))
         logger.info(f"length of files {len(files)}")
         # return

@@ -1,4 +1,3 @@
-
 from abc import abstractmethod
 import logging
 import os
@@ -14,7 +13,11 @@ from langchain.agents.format_scratchpad.openai_tools import (
 from langchain.agents.output_parsers.openai_tools import OpenAIToolsAgentOutputParser
 from app.src import constants
 from sqlalchemy import create_engine
-from app.src.modules.databases import PGVectorManager, get_alchemy_conn_string, ConversationDB
+from app.src.modules.databases import (
+    PGVectorManager,
+    get_alchemy_conn_string,
+    ConversationDB,
+)
 from redis import asyncio as aioredis
 from langchain_aws import ChatBedrock
 from langchain_core.output_parsers import StrOutputParser
@@ -45,9 +48,10 @@ class LLMAgentFactory:
 
         REDIS_URL = os.environ.get("REDIS_URL")
         PROJECT_NAME = os.environ.get("PROJECT_NAME")
-        redis = aioredis.from_url(
-            REDIS_URL, encoding="utf-8", decode_responses=True)
-        llm_id = await redis.get(f"{PROJECT_NAME}:llm_model",)
+        redis = aioredis.from_url(REDIS_URL, encoding="utf-8", decode_responses=True)
+        llm_id = await redis.get(
+            f"{PROJECT_NAME}:llm_model",
+        )
         logger.info("llm_id: %s", llm_id)
         llm_id = "gpt-4o"
         if llm_id in constants.OPENAI_MODELS:
@@ -79,12 +83,12 @@ class OPENAIAgent(Agent):
             This function utilizes a vector store to retrieve relevant documents based on the semantic similarity of their content to the provided search term.
             """
             result = await self.db.get_active_files()
-            VECTORSTORE_COLLECTION_NAME = os.environ.get(
-                "VECTORSTORE_COLLECTION_NAME")
+            VECTORSTORE_COLLECTION_NAME = os.environ.get("VECTORSTORE_COLLECTION_NAME")
             pgmanager = PGVectorManager()
             retriever = pgmanager.return_vector_store(
-                VECTORSTORE_COLLECTION_NAME, async_mode=False)
-            context = ''
+                VECTORSTORE_COLLECTION_NAME, async_mode=False
+            )
+            context = ""
             active_files = []
             for filename_tuple in result:
 
@@ -136,50 +140,55 @@ class OPENAIAgent(Agent):
             | OpenAIToolsAgentOutputParser()
         )
         self.agent_executor = AgentExecutor(
-            agent=agent, tools=tools, verbose=True, return_intermediate_steps=True,)
+            agent=agent,
+            tools=tools,
+            verbose=True,
+            return_intermediate_steps=True,
+        )
 
     async def _build_prompt(self):
-        REDIS_URL = os.environ.get("REDIS_URL")
-        PROJECT_NAME = os.environ.get("PROJECT_NAME")
-        EXTRA_INFO = ""
-        if PROJECT_NAME == "naw":
-            EXTRA_INFO = f"""
-            Here are the two books that you have access to:
+        # REDIS_URL = os.environ.get("REDIS_URL")
+        # PROJECT_NAME = os.environ.get("PROJECT_NAME")
+        # EXTRA_INFO = ""
+        # if PROJECT_NAME == "naw":
+        #     EXTRA_INFO = f"""
+        #     Here are the two books that you have access to:
 
-            Outlines:
+        #     Outlines:
 
-            FTFOC - Innovate to Dominate:
-            {constants.OUTLINE_FTFOC_Innovate_to_Dominate}
+        #     FTFOC - Innovate to Dominate:
+        #     {constants.OUTLINE_FTFOC_Innovate_to_Dominate}
 
-            Mergers and Acquisitions:
-            {constants.OUTLINE_Mergers_and_Acquisitions}
-            """
+        #     Mergers and Acquisitions:
+        #     {constants.OUTLINE_Mergers_and_Acquisitions}
+        #     """
 
-        redis = aioredis.from_url(
-            REDIS_URL, encoding="utf-8", decode_responses=True)
-        self.llm_model_id = await redis.get(f"{PROJECT_NAME}:llm_model",)
+        # redis = aioredis.from_url(
+        #     REDIS_URL, encoding="utf-8", decode_responses=True)
+        # self.llm_model_id = await redis.get(f"{PROJECT_NAME}:llm_model",)
         self.llm_model_id = "gpt-4o"
-        persona = await redis.get(f"{PROJECT_NAME}:persona",)
-        glossary = await redis.get(f"{PROJECT_NAME}:glossary",)
-        tone = await redis.get(f"{PROJECT_NAME}:tone")
-        response_length = await redis.get(f"{PROJECT_NAME}:response_length")
-        content = await redis.get(f"{PROJECT_NAME}:content")
+        # persona = await redis.get(f"{PROJECT_NAME}:persona",)
+        # glossary = await redis.get(f"{PROJECT_NAME}:glossary",)
+        # tone = await redis.get(f"{PROJECT_NAME}:tone")
+        # response_length = await redis.get(f"{PROJECT_NAME}:response_length")
+        # content = await redis.get(f"{PROJECT_NAME}:content")
 
-        PROMPT = f"""
-        You are a {persona} and your job is to answer the user's questions.\
-        Your job is to cater to the distributors sector.\
-        You can only answer questions realted to the data that you retrieve from semantic search.
-        Keep the length of the response {response_length}
-        the tone of the response should be {tone}
-        Here is the glossary for {glossary}
-        Here are some extra instructions:
-        {content}
+        PROMPT = """
+        You are a knowledgeable assistant, and your job is to answer questions related to LISA EHR platform.
+        LISA EHR is a health management platform that provides features like appointment scheduling, resource booking, patient management, medical system checker, and staff management. It also tracks patient demographics, including gender, and provides insights on recovery rates and lab reports.
 
-        Provide a reference for every claim that you make\
-        If you cannot answer the question, just say "Sorry. I don't know."\
-        If the user provides specific instructions about response format, follow them.
+        You can only answer questions related to the features and data of the LISA EHR platform as shown in the dashboard and other sections such as appointments, patients, staff, billing, and more.
 
-        {EXTRA_INFO}
+        If you cannot answer the question based on the LISA EHR platform, just say, "Sorry. I don't know."
+
+        Outlines:
+
+        Dashboard: Information on total patients, appointments, checked-in patients, lab reports, and pending cases.
+        Appointments: Details about scheduled and pending appointments with patient information.
+        Patients: Patient demographic insights (e.g., gender distribution).
+        Staff: Staff details, including designation and expertise.
+        Medical System Checker: Used for tracking the health status and progress of patients.
+        Please ensure you only provide information about LISA EHR. If the user asks about something unrelated, respond with "Sorry. I don't know."
         """
         self.prompt = PROMPT
 
@@ -192,24 +201,24 @@ class OPENAIAgent(Agent):
                 human = {"role": "human", "content": item["prompt"]}
                 extracted_data.append(human)
                 if item["response"] != None:
-                    assistant = {"role": "assistant",
-                                 "content": item["response"]}
+                    assistant = {"role": "assistant", "content": item["response"]}
                     extracted_data.append(assistant)
 
             response = await self.agent_executor.ainvoke(
-                {"input": query, "chat_history": extracted_data})
+                {"input": query, "chat_history": extracted_data}
+            )
 
             self.engine.dispose()
 
             result = response["output"]
             self.logger.critical("result: " + result)
             if response["intermediate_steps"]:
-                context = ''
-                for step in response['intermediate_steps']:
+                context = ""
+                for step in response["intermediate_steps"]:
                     if isinstance(step[-1], str):
-                        context = context + ';' + step[-1]
+                        context = context + ";" + step[-1]
                     else:
-                        context = context + ';' + step[-1][1]
+                        context = context + ";" + step[-1][1]
 
                 return result, context
 
@@ -230,9 +239,10 @@ class BedrockAgent(Agent):
         REDIS_URL = os.environ.get("REDIS_URL")
         PROJECT_NAME = os.environ.get("PROJECT_NAME")
 
-        redis = aioredis.from_url(
-            REDIS_URL, encoding="utf-8", decode_responses=True)
-        model_id = await redis.get(f"{PROJECT_NAME}:llm_model",)
+        redis = aioredis.from_url(REDIS_URL, encoding="utf-8", decode_responses=True)
+        model_id = await redis.get(
+            f"{PROJECT_NAME}:llm_model",
+        )
 
         if model_id in constants.BEDROCK_MODELS:
             self.llm = ChatBedrock(
@@ -242,8 +252,12 @@ class BedrockAgent(Agent):
                 region_name="us-west-2",
             )
 
-        persona = await redis.get(f"{PROJECT_NAME}:persona",)
-        glossary = await redis.get(f"{PROJECT_NAME}:glossary",)
+        persona = await redis.get(
+            f"{PROJECT_NAME}:persona",
+        )
+        glossary = await redis.get(
+            f"{PROJECT_NAME}:glossary",
+        )
         tone = await redis.get(f"{PROJECT_NAME}:tone")
         response_length = await redis.get(f"{PROJECT_NAME}:response_length")
         content = await redis.get(f"{PROJECT_NAME}:content")
@@ -258,7 +272,11 @@ Here are some extra instructions:
 Provide a reference for every claim that you make\
 If you cannot answer the question, just say "Sorry. I don't know."\
 If the user provides specific instructions about response format, follow them.""".format(
-            persona=persona, glossary=glossary, tone=tone, response_length=response_length, content=content
+            persona=persona,
+            glossary=glossary,
+            tone=tone,
+            response_length=response_length,
+            content=content,
         )
 
         prompt = ChatPromptTemplate.from_messages(
@@ -273,24 +291,25 @@ If the user provides specific instructions about response format, follow them.""
 
         self.retrieverprompt = ChatPromptTemplate.from_messages(
             [
-                ("system", f"""You are a part of a vector store retriver. \
+                (
+                    "system",
+                    f"""You are a part of a vector store retriver. \
 A Vector Store retriever calculates the cosine distance betweeen the embeddings of the input text and the stored embeddings, and it returns the closest embeddings. \
 Given a user's prompt and chat history, formulate a single query that will be used to fetch relevant information. \
 Return only the query and nothing else. Do not provide any explanation
 You can use the following glossary to interpret the user's question:
-{glossary}"""),
+{glossary}""",
+                ),
                 ("human", INPUT_KEY),
             ]
         )
 
     async def retriever_chain(self):
         manager = PGVectorManager()
-        VECTORSTORE_COLLECTION_NAME = os.environ.get(
-            "VECTORSTORE_COLLECTION_NAME")
+        VECTORSTORE_COLLECTION_NAME = os.environ.get("VECTORSTORE_COLLECTION_NAME")
         retriever = manager.get_retriever(VECTORSTORE_COLLECTION_NAME, True)
         retrieverprompt = self.retrieverprompt
-        retriever_query_chain = retrieverprompt | self.llm | StrOutputParser(
-        )
+        retriever_query_chain = retrieverprompt | self.llm | StrOutputParser()
 
         retrieverchain = retriever | self.parse_retriever_output
         return retrieverchain, retriever_query_chain
@@ -306,21 +325,20 @@ You can use the following glossary to interpret the user's question:
         retrieverchain, retriever_query_chain = await self.retriever_chain()
         retriever_query_creation_start_time = time.time()
         res = await retriever_query_chain.ainvoke(
-            {"input": query, "chat_history": chat_history})
+            {"input": query, "chat_history": chat_history}
+        )
         self.logger.info("res: %s", res)
         retriever_query_creation_end_time = time.time()
-        self.logger.info(f"retriever query creation time: {retriever_query_creation_end_time - retriever_query_creation_start_time}")
+        self.logger.info(
+            f"retriever query creation time: {retriever_query_creation_end_time - retriever_query_creation_start_time}"
+        )
         context_start_time = time.time()
         context = await retrieverchain.ainvoke(res)
         context_end_time = time.time()
         context_time = context_end_time - context_start_time
         self.logger.info(f"context time: {context_time}")
         self.logger.info("context: %s", context)
-        question = {
-            "input": query,
-            "chat_history": [],
-            "context": context
-        }
+        question = {"input": query, "chat_history": [], "context": context}
         response = await self.agent.ainvoke(question)
 
         total_response_time = time.time() - total_start_time

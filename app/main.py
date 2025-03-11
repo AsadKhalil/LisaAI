@@ -72,10 +72,10 @@ if __name__ == '__main__':
     environment = os.getenv("environment")
     if environment == "production":
         uvicorn.run(app="app.main:app", host='0.0.0.0',
-                    port=8000, log_config=log_config, workers=3, proxy_headers=True)
+                    port=9000, log_config=log_config, workers=3, proxy_headers=True)
     elif environment == "development":
         uvicorn.run(app="app.main:app", host='0.0.0.0',
-                    port=8000, log_config=log_config, workers=2)
+                    port=9000, log_config=log_config, workers=2)
     else:
-        uvicorn.run(app="app.main:app", host='0.0.0.0', port=8000,
+        uvicorn.run(app="app.main:app", host='0.0.0.0', port=9000,
                     reload=True, log_config=log_config)
