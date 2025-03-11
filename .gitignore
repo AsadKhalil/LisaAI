@@ -1,0 +1,28 @@
+.env
+
+app/__pycache__/*
+app/src/__pycache__/*
+.venv/*
+
+pycache
+__pycache__/*
+.vscode/*
+# Ignore ipynb files
+*.ipynb
+
+# Ignore downloaded folder
+downloaded/*
+*.pyc
+firebase_creds.json
+node_modules
+
+# Ignore pdf files
+*.pdf
+
+aws.sh
+
+nixon_images/
+nixon_docs/
+NAED_docs/
+.ipynb_checkpoints/
+profit-optics.json
