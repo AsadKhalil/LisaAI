@@ -53,7 +53,7 @@ class LLMAgentFactory:
             f"{PROJECT_NAME}:llm_model",
         )
         logger.info("llm_id: %s", llm_id)
-        llm_id = "gpt-4o"
+        llm_id = "gpt-4o-mini"
         if llm_id in constants.OPENAI_MODELS:
             agent = OPENAIAgent()
             return agent
@@ -166,7 +166,7 @@ class OPENAIAgent(Agent):
         # redis = aioredis.from_url(
         #     REDIS_URL, encoding="utf-8", decode_responses=True)
         # self.llm_model_id = await redis.get(f"{PROJECT_NAME}:llm_model",)
-        self.llm_model_id = "gpt-4o"
+        self.llm_model_id = "gpt-4o-mini"
         # persona = await redis.get(f"{PROJECT_NAME}:persona",)
         # glossary = await redis.get(f"{PROJECT_NAME}:glossary",)
         # tone = await redis.get(f"{PROJECT_NAME}:tone")
