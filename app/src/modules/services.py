@@ -18,6 +18,8 @@ from app.src.modules.databases import (
     get_alchemy_conn_string,
     ConversationDB,
 )
+
+from app.src.constants import PROMPT, DATA
 from redis import asyncio as aioredis
 from langchain_aws import ChatBedrock
 from langchain_core.output_parsers import StrOutputParser
@@ -103,6 +105,8 @@ class OPENAIAgent(Agent):
                 content = doc.page_content
                 context = context + content
             pgmanager.close()
+            print("-------------------------------------------------------")
+            print(context)
             return context
 
         tools = [semantic_search]
@@ -173,35 +177,29 @@ class OPENAIAgent(Agent):
         # response_length = await redis.get(f"{PROJECT_NAME}:response_length")
         # content = await redis.get(f"{PROJECT_NAME}:content")
 
-        PROMPT = """
-        You are a knowledgeable assistant, and your job is to answer questions related to LISA EHR platform.
-        LISA EHR is a health management platform that provides features like appointment scheduling, resource booking, patient management, medical system checker, and staff management. It also tracks patient demographics, including gender, and provides insights on recovery rates and lab reports.
-
-        You can only answer questions related to the features and data of the LISA EHR platform as shown in the dashboard and other sections such as appointments, patients, staff, billing, and more.
-
-        If you cannot answer the question based on the LISA EHR platform, just say, "Sorry. I don't know."
-
-        Outlines:
-
-        Dashboard: Information on total patients, appointments, checked-in patients, lab reports, and pending cases.
-        Appointments: Details about scheduled and pending appointments with patient information.
-        Patients: Patient demographic insights (e.g., gender distribution).
-        Staff: Staff details, including designation and expertise.
-        Medical System Checker: Used for tracking the health status and progress of patients.
-        Please ensure you only provide information about LISA EHR. If the user asks about something unrelated, respond with "Sorry. I don't know."
-        """
-        self.prompt = PROMPT
+        self.prompt = PROMPT.format(data=DATA)
 
     async def qa(self, query, chat_history):
-
         try:
             extracted_data = []
 
             for item in chat_history:
-                human = {"role": "human", "content": item["prompt"]}
-                extracted_data.append(human)
-                if item["response"] != None:
-                    assistant = {"role": "assistant", "content": item["response"]}
+
+                # human = {"role": "human", "content": item["prompt"]}
+                # extracted_data.append(human)
+                # if item["response"] != None:
+                #     assistant = {"role": "assistant", "content": item["response"]}
+                if not isinstance(item, dict):
+                    continue
+                    
+                prompt = item.get("prompt")
+                if prompt:
+                    human = {"role": "human", "content": prompt}
+                    extracted_data.append(human)
+                
+                response = item.get("response")
+                if response is not None:
+                    assistant = {"role": "assistant", "content": response}
                     extracted_data.append(assistant)
 
             response = await self.agent_executor.ainvoke(
