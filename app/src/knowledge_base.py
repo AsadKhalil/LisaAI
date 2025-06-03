@@ -18,9 +18,10 @@ import urllib.parse
 async def new_knowledge_base(files):
     """create a new rag database from uploaded files"""
     try:
-
+        # Get the absolute path to the app directory
+        app_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         # clear knowledge base files directory
-        save_path = os.path.join(os.getcwd(), constants.UPLOAD_PATH)
+        save_path = os.path.join(app_dir, constants.UPLOAD_PATH)
         if os.path.exists(save_path):
             shutil.rmtree(save_path)
         os.mkdir(save_path)
@@ -46,10 +47,11 @@ async def new_knowledge_base(files):
         for file in filepaths:
             await ingest_file(file)
 
-        shutil.rmtree(constants.UPLOAD_PATH)
+        #shutil.rmtree(save_path)
         return data
     except Exception as e:
-        shutil.rmtree(constants.UPLOAD_PATH)
+        # if os.path.exists(save_path):
+        #     shutil.rmtree(save_path)
         print(traceback.format_exc())
         print(sys.exc_info()[2])
         raise HTTPException(status_code=500, detail=str(e))
