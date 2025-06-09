@@ -220,8 +220,11 @@ class ConversationDB:
     async def add_files(self, data, user_id):
         try:
             # Prepare data for batch insertion
+            self.logger.info(f"Received data in add_files: {data}")
+            self.logger.info(f"User ID in add_files: {user_id}")
             values = [(item['filename'], item['url'], user_id)
                       for item in data]
+            self.logger.info(f"Prepared values for insertion: {values}")
 
             conn = psycopg.connect(self.conn_string)
             cursor = conn.cursor()
@@ -232,20 +235,19 @@ class ConversationDB:
             conn.commit()
             cursor.close()
             conn.close()
+            self.logger.info("Successfully inserted files into database")
 
         except psycopg.Error as err:
             self.logger.exception(err)
 
     async def get_files(self):
-
         self.conn = psycopg.connect(self.conn_string)
         cursor = self.conn.cursor()
         cursor.execute('''
-            SELECT u.name, u.email, q.file_name, q.url, q.created_at, q.updated_at, q.active
-            FROM public.files q 
-            join users u on q.user_id=u.id::text
-            order by q.created_at
-            desc''',)
+            SELECT file_name, url, user_id, created_at, updated_at, active
+            FROM public.files 
+            order by created_at desc
+        ''',)
 
         rows = cursor.fetchall()
         cursor.close()

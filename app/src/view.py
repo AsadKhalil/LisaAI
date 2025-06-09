@@ -120,6 +120,52 @@ async def get_chatbot_response(query: Query):
         print(sys.exc_info()[2])
         raise HTTPException(status_code=500, detail=str(e)) from e
 
+@router.post("/drugquery", response_class=HTMLResponse)
+async def get_chatbot_response(query: Query):
+    """route definition for chatbot"""
+    try:
+        start_time = time.time()
+        logger.info(f"User's query: {query.input}")
+        # user_id = current_user.uid
+        # user_role = current_user.custom_claims.get('role')
+        llm = await LLMAgentFactory().create()
+        await llm._build_prompt()
+        await llm._create_agent()
+
+        # if current_user.custom_claims.get('local_id') is not None:
+        #     user_id = current_user.custom_claims.get('local_id')
+        #     logger.info(f"Current user's local id: {user_id}")
+        user_id = 2
+        conversation_id = None
+
+        if not query.convo_id:  # Check if 'chat_history' is not present or empty
+            conversation_id = await db.insert_conversation(
+                user_id, query.input)
+            logger.info(f"new Conversation ID: {conversation_id}")
+        else:
+            conversation_id = query.convo_id
+
+        # chatbot's response
+        response, context = await llm.qa(
+            query.input, query.chat_history)
+        end_time = time.time()
+        response_time = end_time - start_time
+        conversation_id = json.dumps(str(conversation_id))
+        conversation_id = conversation_id.strip('"')
+        # Store the query and response in the database
+        query_id = await db.insert_query(conversation_id,
+                                         query.input, response, context, response_time, user_id=user_id)
+        query_id = json.dumps(str(query_id))
+        query_id = query_id.strip('"')
+        response = {"response": response,
+                    "query_id": query_id, "convo_id": conversation_id}
+        stringified_response = json.dumps(response)
+
+        return stringified_response
+    except Exception as e:
+        print(traceback.format_exc())
+        print(sys.exc_info()[2])
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 @router.post("/rating")
 async def add_rating(data: Rating, current_user: Annotated[Any, Depends(get_current_user)]):
@@ -388,6 +434,7 @@ async def create_knowledge_base(files: Annotated[List[UploadFile], File()]):
         logger.info(f"length of files {len(files)}")
         # return
         data = await new_knowledge_base(files=files)
+        logger.info(f"Data being passed to add_files: {data}")
         _ = await db.add_files(data, user_id=user_id)
         return "Knowledge Base updated successfully"
     except Exception as e:
@@ -397,22 +444,20 @@ async def create_knowledge_base(files: Annotated[List[UploadFile], File()]):
 
 
 @router.get("/list-files")
-async def list_files(current_user: Annotated[Any, Depends(get_current_user)]):
-
+async def list_files():
     try:
-        if current_user.custom_claims.get('role') != constants.ADMIN_ROLE:
-            raise HTTPException(status_code=401, detail="Unauthorised")
+        # if current_user.custom_claims.get('role') != constants.ADMIN_ROLE:
+        #     raise HTTPException(status_code=401, detail=" Unauthorised_")
         response = await db.get_files()
         json_list = []
         for tup in response:
             json_dict = {
-                "name": tup[0],
-                "email": tup[1],
-                "filename": tup[2],
-                "url": tup[3],
-                "created_at": tup[4],
-                "updated_at": tup[5],
-                "active": tup[6],
+                "filename": tup[0],
+                "url": tup[1],
+                "user_id": tup[2],
+                "created_at": tup[3],
+                "updated_at": tup[4],
+                "active": tup[5],
             }
             json_list.append(json_dict)
         return json_list
