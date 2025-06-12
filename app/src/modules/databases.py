@@ -9,6 +9,7 @@ from app.src import constants
 from langchain_openai import OpenAIEmbeddings
 from app.src.modules.auth import Authentication
 
+logger = logging.getLogger("databases")
 
 def get_connection_string():
     # For reference:
@@ -43,27 +44,55 @@ class PGVectorManager:
         connection_string = get_alchemy_conn_string()
         self.connection_string = connection_string.replace(
             "psycopg2", "psycopg")
-        self.logger.critical(f"Connection string: {self.connection_string}")
+        # Mask sensitive parts of connection string for logging
+        masked_conn = self.connection_string
+        if "://" in masked_conn:
+            parts = masked_conn.split("://")
+            if len(parts) > 1:
+                auth_parts = parts[1].split("@")
+                if len(auth_parts) > 1:
+                    masked_conn = f"{parts[0]}://****:****@{auth_parts[1]}"
+        self.logger.debug(f"Connection string: {masked_conn}")
 
     def return_vector_store(self, collection_name, async_mode) -> PGVector:
-
-        self.vectorstore = PGVector(
-            embeddings=OpenAIEmbeddings(model=constants.EMBEDDINGS_MODEL),
-            collection_name=collection_name,
-            connection=self.connection_string,
-            use_jsonb=True,
-            async_mode=async_mode
-        )
-        return self.vectorstore
+        try:
+            logger.info(f"1")
+            self.vectorstore = PGVector(
+                embeddings=OpenAIEmbeddings(model=constants.EMBEDDINGS_MODEL),
+                collection_name=collection_name,
+                connection=self.connection_string,
+                use_jsonb=True,
+                async_mode=async_mode
+            )
+            logger.info(f"2")
+            return self.vectorstore
+        except Exception as e:
+            self.logger.error(f"Error creating vector store: {str(e)}")
+            raise HTTPException(status_code=500, detail=f"Database connection error: {str(e)}")
 
     async def insert_documents(self, collection_name, documents, async_mode=True):
-        vectorstore = self.return_vector_store(collection_name, async_mode)
-        await vectorstore.aadd_documents(documents)
+        try:
+            self.logger.info(f"Starting to insert {len(documents)} documents into collection {collection_name}")
+            vectorstore = self.return_vector_store(collection_name, async_mode)
+            self.logger.info("Vector store created successfully")
+            await vectorstore.aadd_documents(documents)
+            self.logger.info("Documents added successfully")
+        except Exception as e:
+            self.logger.error(f"Error inserting documents: {str(e)}")
+            self.logger.error(traceback.format_exc())
+            raise HTTPException(status_code=500, detail=f"Error inserting documents: {str(e)}")
 
-    def get_retriever(self, collection_name, async_mode):
-        vectorstore = self.return_vector_store(collection_name, async_mode)
-        retriever = vectorstore.as_retriever(search_kwargs={'k': 5})
-        return retriever
+    def get_retriever(self, collection_name, async_mode, search_kwargs=None):
+        try:
+            vectorstore = self.return_vector_store(collection_name, async_mode)
+            default_kwargs = {'k': 5}
+            if search_kwargs:
+                default_kwargs.update(search_kwargs)
+            retriever = vectorstore.as_retriever(search_kwargs=default_kwargs)
+            return retriever
+        except Exception as e:
+            self.logger.error(f"Error in get_retriever: {str(e)}")
+            raise HTTPException(status_code=500, detail=f"Error getting retriever: {str(e)}")
 
     def close(self):
         if self.vectorstore is not None:
@@ -71,6 +100,37 @@ class PGVectorManager:
                 self.vectorstore.__async_engine.close()
             if hasattr(self.vectorstore, "__engine"):
                 self.vectorstore.__engine.close()
+
+    def check_collection_exists(self, collection_name):
+        """Check if a collection exists and has data"""
+        try:
+            vectorstore = self.return_vector_store(collection_name, False)
+            # Try to get one document from the collection
+            retriever = vectorstore.as_retriever(search_kwargs={'k': 1})
+            docs = retriever.invoke("test")
+            return len(docs) > 0
+        except Exception as e:
+            self.logger.error(f"Error checking collection {collection_name}: {str(e)}")
+            return False
+
+    def get_collection_stats(self, collection_name):
+        """Get statistics about a collection"""
+        try:
+            vectorstore = self.return_vector_store(collection_name, False)
+            # Get all documents from the collection
+            retriever = vectorstore.as_retriever(search_kwargs={'k': 1000})  # Get a large number to count all
+            docs = retriever.invoke("test")
+            return {
+                "exists": True,
+                "document_count": len(docs),
+                "sample_documents": [doc.page_content[:200] for doc in docs[:3]]  # First 200 chars of first 3 docs
+            }
+        except Exception as e:
+            self.logger.error(f"Error getting stats for collection {collection_name}: {str(e)}")
+            return {
+                "exists": False,
+                "error": str(e)
+            }
 
 
 class ConversationDB:
@@ -848,3 +908,23 @@ class ConversationDB:
         cursor.close()
         self.conn.close()
         return rows
+
+    async def get_file_names_by_collection(self, collection_name: str):
+        """Get all file names associated with a specific collection from the langchain_pg_embedding table."""
+        try:
+            self.conn = psycopg.connect(self.conn_string)
+            cursor = self.conn.cursor()
+            cursor.execute('''
+                SELECT DISTINCT cmetadata ->> 'source' as file_name
+                FROM public.langchain_pg_embedding
+                WHERE cmetadata ->> 'collection_name' = %s
+            ''', (collection_name,))
+            rows = cursor.fetchall()
+            cursor.close()
+            self.conn.close()
+            # Extract file names from the results and remove any None values
+            file_names = [row[0] for row in rows if row[0] is not None]
+            return file_names
+        except psycopg.Error as err:
+            self.logger.exception(err)
+            raise err
