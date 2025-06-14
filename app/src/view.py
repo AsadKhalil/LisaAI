@@ -84,6 +84,8 @@ async def get_chatbot_response(query: Query):
         # user_id = current_user.uid
         # user_role = current_user.custom_claims.get('role')
         llm = await LLMAgentFactory().create()
+        if type(llm) == str:
+            return llm
         await llm._build_prompt()
         await llm._create_agent()
 
@@ -100,9 +102,20 @@ async def get_chatbot_response(query: Query):
         else:
             conversation_id = query.convo_id
 
+        # If chat_history is not provided, fetch it from the database
+        chat_history = query.chat_history
+        if chat_history is None and conversation_id:
+            conversation_rows = await db.get_conversation(conversation_id)
+            chat_history = []
+            for row in conversation_rows:
+                chat_history.append({
+                    "prompt": row[2],  # Question column
+                    "response": row[3]  # Answer column
+                })
+
         # chatbot's response
         response, context = await llm.qa(
-            query.input, query.chat_history)
+            query.input, chat_history)
         end_time = time.time()
         response_time = end_time - start_time
         conversation_id = json.dumps(str(conversation_id))
@@ -122,18 +135,18 @@ async def get_chatbot_response(query: Query):
         print(sys.exc_info()[2])
         raise HTTPException(status_code=500, detail=str(e)) from e
 
-@router.get("/check_drug_index")
-async def check_drug_index():
-    """Check if the drug index exists and has data"""
-    try:
-        pgmanager = PGVectorManager()
-        stats = pgmanager.get_collection_stats("drug-index")
-        pgmanager.close()
-        return stats
-    except Exception as e:
-        logger.error(f"Error checking drug index: {str(e)}")
-        logger.error(traceback.format_exc())
-        raise HTTPException(status_code=500, detail=str(e))
+# @router.get("/check_drug_index")
+# async def check_drug_index():
+#     """Check if the drug index exists and has data"""
+#     try:
+#         pgmanager = PGVectorManager()
+#         stats = pgmanager.get_collection_stats("drug-index")
+#         pgmanager.close()
+#         return stats
+#     except Exception as e:
+#         logger.error(f"Error checking drug index: {str(e)}")
+#         logger.error(traceback.format_exc())
+#         raise HTTPException(status_code=500, detail=str(e))
 
 @router.post("/rating")
 async def add_rating(data: Rating, current_user: Annotated[Any, Depends(get_current_user)]):
@@ -435,44 +448,44 @@ async def list_files():
         raise HTTPException(
             status_code=401, detail="Unexpected Error")
 
-@router.get("/list-drug-index-files")
-async def list_drug_index_files():
-    """
-    Get a list of all files in the drug-index collection.
-    Returns file names and their status in the vector store.
-    """
-    try:
-        # Get file names from the drug-index collection
-        file_names = await db.get_file_names_by_collection("drug-index")
+# @router.get("/list-drug-index-files")
+# async def list_drug_index_files():
+#     """
+#     Get a list of all files in the drug-index collection.
+#     Returns file names and their status in the vector store.
+#     """
+#     try:
+#         # Get file names from the drug-index collection
+#         file_names = await db.get_file_names_by_collection("drug-index")
         
-        if not file_names:
-            return {"message": "No files found in drug-index collection.", "files": []}
+#         if not file_names:
+#             return {"message": "No files found in drug-index collection.", "files": []}
 
-        # Get file details from the database
-        all_files = await db.get_files()
-        drug_index_files = []
+#         # Get file details from the database
+#         all_files = await db.get_files()
+#         drug_index_files = []
         
-        # Filter and combine information
-        for file_name in file_names:
-            file_info = next((f for f in all_files if f[0] == file_name), None)
-            if file_info:
-                drug_index_files.append({
-                    "filename": file_info[0],
-                    "url": file_info[1],
-                    "user_id": file_info[2],
-                    "created_at": file_info[3],
-                    "updated_at": file_info[4],
-                    "active": file_info[5]
-                })
+#         # Filter and combine information
+#         for file_name in file_names:
+#             file_info = next((f for f in all_files if f[0] == file_name), None)
+#             if file_info:
+#                 drug_index_files.append({
+#                     "filename": file_info[0],
+#                     "url": file_info[1],
+#                     "user_id": file_info[2],
+#                     "created_at": file_info[3],
+#                     "updated_at": file_info[4],
+#                     "active": file_info[5]
+#                 })
 
-        return {
-            "message": f"Found {len(drug_index_files)} files in drug-index collection",
-            "files": drug_index_files
-        }
-    except Exception as e:
-        logger.error(f"Error listing drug-index files: {str(e)}")
-        logger.error(traceback.format_exc())
-        raise HTTPException(status_code=500, detail=str(e))
+#         return {
+#             "message": f"Found {len(drug_index_files)} files in drug-index collection",
+#             "files": drug_index_files
+#         }
+#     except Exception as e:
+#         logger.error(f"Error listing drug-index files: {str(e)}")
+#         logger.error(traceback.format_exc())
+#         raise HTTPException(status_code=500, detail=str(e))
 
 @router.post('/delete-file')
 async def delete_file(input: DeleteFile):
@@ -486,47 +499,47 @@ async def delete_file(input: DeleteFile):
         print(traceback.format_exc())
         raise HTTPException(status_code=500, detail=str(e))
 
-@router.post("/clean-drug-index")
-async def clean_drug_index():
-    """
-    Deletes all files and embeddings from the drug-index collection.
-    Returns a summary of successful and failed deletions.
-    """
-    try:
-        # Step 1: Get all file names linked to the 'drug-index'
-        file_names = await db.get_file_names_by_collection("drug-index")
+# @router.post("/clean-drug-index")
+# async def clean_drug_index():
+#     """
+#     Deletes all files and embeddings from the drug-index collection.
+#     Returns a summary of successful and failed deletions.
+#     """
+#     try:
+#         # Step 1: Get all file names linked to the 'drug-index'
+#         file_names = await db.get_file_names_by_collection("drug-index")
         
-        if not file_names:
-            return {"message": "No files found in drug-index collection."}
+#         if not file_names:
+#             return {"message": "No files found in drug-index collection."}
 
-        aws = AWS()
-        results = {
-            "successful": [],
-            "failed": []
-        }
+#         aws = AWS()
+#         results = {
+#             "successful": [],
+#             "failed": []
+#         }
 
-        for file_name in file_names:
-            try:
-                # Delete from AWS
-                aws.delete_file(file_name)
-                # Delete from database
-                await db.delete_file(file_name)
-                # Delete embeddings
-                await db.delete_file_embeddings(file_name)
-                results["successful"].append(file_name)
-            except Exception as e:
-                logger.error(f"Failed to delete file {file_name}: {str(e)}")
-                results["failed"].append({"file": file_name, "error": str(e)})
+#         for file_name in file_names:
+#             try:
+#                 # Delete from AWS
+#                 aws.delete_file(file_name)
+#                 # Delete from database
+#                 await db.delete_file(file_name)
+#                 # Delete embeddings
+#                 await db.delete_file_embeddings(file_name)
+#                 results["successful"].append(file_name)
+#             except Exception as e:
+#                 logger.error(f"Failed to delete file {file_name}: {str(e)}")
+#                 results["failed"].append({"file": file_name, "error": str(e)})
 
-        return {
-            "message": f"Cleanup completed. {len(results['successful'])} files deleted successfully.",
-            "details": results
-        }
+#         return {
+#             "message": f"Cleanup completed. {len(results['successful'])} files deleted successfully.",
+#             "details": results
+#         }
     
-    except Exception as e:
-        logger.error(f"Error in clean-drug-index: {str(e)}")
-        logger.error(traceback.format_exc())
-        raise HTTPException(status_code=500, detail=str(e))
+#     except Exception as e:
+#         logger.error(f"Error in clean-drug-index: {str(e)}")
+#         logger.error(traceback.format_exc())
+#         raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.post("/file-active-toggle")
@@ -586,72 +599,72 @@ async def get_prompt(current_user: Annotated[Any, Depends(get_current_user)]):
             raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.post("/drug_index")
-async def drug_index_endpoint(files: Annotated[List[UploadFile], File()]):
-    try:
-        logger.info(f"Received {len(files)} files for drug index processing")
-        results = []
-        for file in files:
-            logger.info(f"Processing file: {file.filename}")
-            result = await process_file(file, collection_name="drug-index")
-            logger.info(f"Completed processing file: {file.filename}")
-            results.append(result)
-        logger.info("All files processed successfully")
-        return {"status": "Drug Index updated successfully", "files": results}
-    except Exception as e:
-        logger.error(f"Error in drug_index endpoint: {str(e)}")
-        logger.error(traceback.format_exc())
-        raise HTTPException(status_code=500, detail=str(e))
+# @router.post("/drug_index")
+# async def drug_index_endpoint(files: Annotated[List[UploadFile], File()]):
+#     try:
+#         logger.info(f"Received {len(files)} files for drug index processing")
+#         results = []
+#         for file in files:
+#             logger.info(f"Processing file: {file.filename}")
+#             result = await process_file(file, collection_name="drug-index")
+#             logger.info(f"Completed processing file: {file.filename}")
+#             results.append(result)
+#         logger.info("All files processed successfully")
+#         return {"status": "Drug Index updated successfully", "files": results}
+#     except Exception as e:
+#         logger.error(f"Error in drug_index endpoint: {str(e)}")
+#         logger.error(traceback.format_exc())
+#         raise HTTPException(status_code=500, detail=str(e))
 
 
 class DrugQuery(BaseModel):
     query: str
 
-@router.post("/query_drug")
-async def query_drug_endpoint(query: DrugQuery):
-    """Query the drug index for specific drug information"""
-    try:
-        logger.info(f"Starting drug query endpoint with query: {query.query}")
-        VECTORSTORE_COLLECTION_NAME = "drug-index"
-        logger.info(f"Using vector store collection: {VECTORSTORE_COLLECTION_NAME}")
+# @router.post("/query_drug")
+# async def query_drug_endpoint(query: DrugQuery):
+#     """Query the drug index for specific drug information"""
+#     try:
+#         logger.info(f"Starting drug query endpoint with query: {query.query}")
+#         VECTORSTORE_COLLECTION_NAME = "drug-index"
+#         logger.info(f"Using vector store collection: {VECTORSTORE_COLLECTION_NAME}")
 
-        pgmanager = PGVectorManager()
-        logger.info("Initialized PGVectorManager")
+#         pgmanager = PGVectorManager()
+#         logger.info("Initialized PGVectorManager")
 
-        # Set up retriever (we filter manually)
-        retriever = pgmanager.get_retriever(
-            VECTORSTORE_COLLECTION_NAME,
-            async_mode=False,
-            search_kwargs={'k': 5}
-        )
-        logger.info("Retriever initialized without score_threshold")
+#         # Set up retriever (we filter manually)
+#         retriever = pgmanager.get_retriever(
+#             VECTORSTORE_COLLECTION_NAME,
+#             async_mode=False,
+#             search_kwargs={'k': 5}
+#         )
+#         logger.info("Retriever initialized without score_threshold")
 
-        # Perform similarity search with scores
-        logger.info("Performing similarity_search_with_score")
-        results = retriever.vectorstore.similarity_search_with_score(query.query, k=5)
+#         # Perform similarity search with scores
+#         logger.info("Performing similarity_search_with_score")
+#         results = retriever.vectorstore.similarity_search_with_score(query.query, k=5)
 
-        score_threshold = 0.75  # Lowered threshold to catch more relevant docs
-        filtered_docs = []
+#         score_threshold = 0.75  # Lowered threshold to catch more relevant docs
+#         filtered_docs = []
 
-        for doc, score in results:
-            snippet = doc.page_content.strip()[:120].replace("\n", " ")
-            logger.info(f"Score: {score:.4f} | Snippet: {snippet}")
-            if score >= score_threshold:
-                filtered_docs.append(doc)
+#         for doc, score in results:
+#             snippet = doc.page_content.strip()[:120].replace("\n", " ")
+#             logger.info(f"Score: {score:.4f} | Snippet: {snippet}")
+#             if score >= score_threshold:
+#                 filtered_docs.append(doc)
 
-        if not filtered_docs:
-            logger.warning("No documents found above threshold")
-            return {"response": "I don't have information about that in my database. Please try asking about a different medical condition or drug."}
+#         if not filtered_docs:
+#             logger.warning("No documents found above threshold")
+#             return {"response": "I don't have information about that in my database. Please try asking about a different medical condition or drug."}
 
-        # Use best matching document
-        best_match_content = filtered_docs[0].page_content.strip()
-        logger.info("Returning best match document content")
+#         # Use best matching document
+#         best_match_content = filtered_docs[0].page_content.strip()
+#         logger.info("Returning best match document content")
 
-        return {"response": best_match_content}
+#         return {"response": best_match_content}
 
-    except Exception as e:
-        logger.error(f"Error in query_drug endpoint: {str(e)}")
-        logger.error(traceback.format_exc())
-        raise HTTPException(status_code=500, detail="Internal server error")
+#     except Exception as e:
+#         logger.error(f"Error in query_drug endpoint: {str(e)}")
+#         logger.error(traceback.format_exc())
+#         raise HTTPException(status_code=500, detail="Internal server error")
 
 

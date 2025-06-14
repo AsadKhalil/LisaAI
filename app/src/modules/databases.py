@@ -12,7 +12,6 @@ from app.src.modules.auth import Authentication
 logger = logging.getLogger("databases")
 
 def get_connection_string():
-    # For reference:
     # conn_string = f"host='{db_host}' port='{db_port}' dbname='{
     #     db_name}' user='{db_user}' password='{db_password}' sslmode='require'"
 
