@@ -1,5 +1,6 @@
 from abc import abstractmethod
 import logging
+from dotenv import load_dotenv
 import os
 import time
 import traceback
@@ -26,7 +27,7 @@ from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 
 INPUT_KEY = "{input}"
-
+load_dotenv()
 
 class Agent:
     @abstractmethod
@@ -50,20 +51,30 @@ class LLMAgentFactory:
 
         REDIS_URL = os.environ.get("REDIS_URL")
         PROJECT_NAME = os.environ.get("PROJECT_NAME")
-        redis = aioredis.from_url(REDIS_URL, encoding="utf-8", decode_responses=True)
-        llm_id = await redis.get(
-            f"{PROJECT_NAME}:llm_model",
-        )
+        # redis = aioredis.from_url(REDIS_URL, encoding="utf-8", decode_responses=True)
+        # llm_id = await redis.get(
+        #     f"{PROJECT_NAME}:llm_model",
+        # )
+        llm_id = os.environ.get("OPENAI_MODEL")
         logger.info("llm_id: %s", llm_id)
-        llm_id = "gpt-4o-mini"
-        if llm_id in constants.OPENAI_MODELS:
-            agent = OPENAIAgent()
-            return agent
-        if llm_id in constants.BEDROCK_MODELS:
-            agent = BedrockAgent()
-            return agent
-        agent = OPENAIAgent()
-        return agent
+        resp = ""
+        if llm_id == None:
+            resp = "No LLM found"
+            return resp
+        #llm_id = "gpt-4o-mini"
+        else:
+            if llm_id in constants.OPENAI_MODELS:
+                agent = OPENAIAgent()
+                return agent
+            elif llm_id in constants.BEDROCK_MODELS:
+                agent = BedrockAgent()
+                return agent
+            else:
+                resp = "LLM not in allowed list"
+                return resp
+        # agent = OPENAIAgent()
+        # return agent
+        
 
 
 class OPENAIAgent(Agent):
@@ -77,7 +88,7 @@ class OPENAIAgent(Agent):
         self.db = ConversationDB()
 
     async def _create_agent(self) -> None:
-        self.llm = ChatOpenAI(model=self.llm_model_id, temperature=0)
+        self.llm = ChatOpenAI(model=self.llm_model_id, temperature=0.3)
 
         @tool
         async def semantic_search(search_term: str):
@@ -92,6 +103,7 @@ class OPENAIAgent(Agent):
             )
             context = ""
             active_files = []
+            print("#######################", result)
             for filename_tuple in result:
 
                 filename = filename_tuple[0]
@@ -170,14 +182,14 @@ class OPENAIAgent(Agent):
         # redis = aioredis.from_url(
         #     REDIS_URL, encoding="utf-8", decode_responses=True)
         # self.llm_model_id = await redis.get(f"{PROJECT_NAME}:llm_model",)
-        self.llm_model_id = "gpt-4o-mini"
+        self.llm_model_id = os.environ.get("OPENAI_MODEL")
         # persona = await redis.get(f"{PROJECT_NAME}:persona",)
         # glossary = await redis.get(f"{PROJECT_NAME}:glossary",)
         # tone = await redis.get(f"{PROJECT_NAME}:tone")
         # response_length = await redis.get(f"{PROJECT_NAME}:response_length")
         # content = await redis.get(f"{PROJECT_NAME}:content")
 
-        self.prompt = PROMPT.format(data=DATA)
+        self.prompt = PROMPT
 
     async def qa(self, query, chat_history):
         try:

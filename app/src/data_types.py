@@ -1,4 +1,4 @@
-from typing import Union
+from typing import Union, Optional
 from pydantic import BaseModel
 import uuid
 
@@ -23,7 +23,7 @@ class Query(BaseModel):
     chatbot query input
     """
     input: str
-    chat_history: list
+    chat_history: Optional[list] = None
     convo_id: Union[str, None]
 
 
