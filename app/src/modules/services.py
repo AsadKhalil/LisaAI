@@ -25,6 +25,7 @@ from redis import asyncio as aioredis
 from langchain_aws import ChatBedrock
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
+import openai
 
 INPUT_KEY = "{input}"
 load_dotenv()
@@ -84,6 +85,8 @@ class OPENAIAgent(Agent):
         self.logger = logging.getLogger("OPENAIAgent")
         self.conn_string = get_alchemy_conn_string()
         self.logger.info("connection string: %s", self.conn_string)
+        self.logger.info("OPENAI_API_KEY set: %s", bool(os.getenv("OPENAI_API_KEY")))
+        self.logger.info("OPENAI_MODEL: %s", os.getenv("OPENAI_MODEL"))
         self.engine = create_engine(self.conn_string)
         self.db = ConversationDB()
 
@@ -196,11 +199,6 @@ class OPENAIAgent(Agent):
             extracted_data = []
 
             for item in chat_history:
-
-                # human = {"role": "human", "content": item["prompt"]}
-                # extracted_data.append(human)
-                # if item["response"] != None:
-                #     assistant = {"role": "assistant", "content": item["response"]}
                 if not isinstance(item, dict):
                     continue
                     
@@ -233,8 +231,14 @@ class OPENAIAgent(Agent):
                 return result, context
 
             return result, ""
-        except Exception:
-            self.logger.exception(traceback.format_exc())
+        except openai.RateLimitError as e:
+            self.logger.exception("OpenAI Rate Limit Error: %s", str(e))
+            error_message = "The request was too large. Please try with a shorter message or wait a minute before trying again."
+            return error_message, ""
+        except Exception as e:
+            self.logger.exception("Error in qa method: %s", str(e))
+            error_message = f"An error occurred: {str(e)}"
+            return error_message, ""
 
 
 class BedrockAgent(Agent):

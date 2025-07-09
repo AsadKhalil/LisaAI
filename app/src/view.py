@@ -5,12 +5,12 @@ import traceback
 from typing import Any, List
 import app.src.constants as constants
 from typing_extensions import Annotated
-from fastapi import Depends, Response, UploadFile, HTTPException, APIRouter, File, Form
-from fastapi.responses import HTMLResponse
+from fastapi import Depends, Response, UploadFile, HTTPException, APIRouter, File, Form, Query as FastAPIQuery
+from fastapi.responses import HTMLResponse, FileResponse
 from fastapi.security import OAuth2PasswordBearer
 # from firebase_admin.auth import UserRecord
 from app.src.rating import add_rating_data
-from app.src.data_types import ChangeRole, Conversation, Rating, Query, UpdateUser, Prompt, DeleteFile, ActiveFile
+from app.src.data_types import ChangeRole, Conversation, Rating, Query, UpdateUser, Prompt, DeleteFile, ActiveFile, TreatmentPlanRequest
 from .modules.databases import ConversationDB
 from .modules.services import LLMAgentFactory
 from .modules.auth import Authentication
@@ -23,6 +23,19 @@ from redis import asyncio as aioredis
 import app.src.error_messages as error_messages
 from app.src.modules.databases import PGVectorManager
 from pydantic import BaseModel
+import mysql.connector
+from reportlab.lib.pagesizes import letter, A4
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, PageBreak
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.lib.units import inch
+from reportlab.lib import colors
+from reportlab.lib.enums import TA_LEFT, TA_CENTER, TA_JUSTIFY
+import tempfile
+from datetime import datetime, date
+import atexit
+import shutil
+import markdown2
+from bs4 import BeautifulSoup
 
 oauth2scheme = OAuth2PasswordBearer(
     tokenUrl="token",
@@ -42,6 +55,20 @@ REDIS_URL = os.environ.get("REDIS_URL")
 redis = aioredis.from_url(REDIS_URL, encoding="utf-8", decode_responses=True)
 logger = logging.getLogger("view(router)")
 
+# Global list to track temporary files for cleanup
+temp_files = []
+
+def cleanup_temp_files():
+    """Clean up temporary files on application shutdown"""
+    for temp_file in temp_files:
+        try:
+            if os.path.exists(temp_file):
+                os.unlink(temp_file)
+        except Exception as e:
+            logger.error(f"Error cleaning up temp file {temp_file}: {str(e)}")
+
+# Register cleanup function
+atexit.register(cleanup_temp_files)
 
 async def get_current_user(token: Annotated[str, Depends(oauth2scheme)]):
     """get current user"""
@@ -666,5 +693,447 @@ class DrugQuery(BaseModel):
 #         logger.error(f"Error in query_drug endpoint: {str(e)}")
 #         logger.error(traceback.format_exc())
 #         raise HTTPException(status_code=500, detail="Internal server error")
+
+
+def get_comprehensive_patient_data(connection, patient_id):
+    """Fetch comprehensive patient data from all related tables"""
+    cursor = connection.cursor(dictionary=True)
+    
+    logger.info(f"🔍 Starting comprehensive data retrieval for patient ID: {patient_id}")
+    
+    # Fetch patient basic info
+    logger.info(f"📋 Querying 'patients' table for patient_id: {patient_id}")
+    cursor.execute("SELECT * FROM patients WHERE id = %s", (patient_id,))
+    patient = cursor.fetchone()
+    logger.info(f"✅ Patients table: Found {'1 record' if patient else '0 records'}")
+    
+    if not patient:
+        logger.warning(f"❌ Patient with ID {patient_id} not found in patients table")
+        cursor.close()
+        return None
+    
+    # Fetch allergies
+    logger.info(f"🤧 Querying 'allergies' table for patientId: {patient_id}")
+    cursor.execute("SELECT * FROM allergies WHERE patientId = %s", (patient_id,))
+    allergies = cursor.fetchall()
+    logger.info(f"✅ Allergies table: Found {len(allergies)} records")
+    
+    # Fetch problems
+    logger.info(f"🏥 Querying 'problem' table for patient_id: {patient_id}")
+    cursor.execute("SELECT * FROM problem WHERE patient_id = %s", (patient_id,))
+    problems = cursor.fetchall()
+    logger.info(f"✅ Problems table: Found {len(problems)} records")
+    
+    # Fetch patient medications
+    logger.info(f"💊 Querying 'patient_medications' table for patient_id: {patient_id}")
+    cursor.execute("SELECT * FROM patient_medications WHERE patient_id = %s", (patient_id,))
+    medications = cursor.fetchall()
+    logger.info(f"✅ Patient medications table: Found {len(medications)} records")
+    
+    # Fetch patient encounters
+    logger.info(f"👨‍⚕️ Querying 'patient_encounters' table for patientId: {patient_id}")
+    cursor.execute("SELECT * FROM patient_encounters WHERE patientId = %s", (patient_id,))
+    encounters = cursor.fetchall()
+    logger.info(f"✅ Patient encounters table: Found {len(encounters)} records")
+    
+    # Fetch vitals
+    logger.info(f"❤️ Querying 'vitals' table for patientId: {patient_id}")
+    cursor.execute("SELECT * FROM vitals WHERE patientId = %s", (patient_id,))
+    vitals = cursor.fetchall()
+    logger.info(f"✅ Vitals table: Found {len(vitals)} records")
+    
+    # Fetch laboratory results
+    logger.info(f"🔬 Querying 'laboratory' table for patientId: {patient_id}")
+    cursor.execute("SELECT * FROM laboratory WHERE patientId = %s", (patient_id,))
+    laboratory = cursor.fetchall()
+    logger.info(f"✅ Laboratory table: Found {len(laboratory)} records")
+    
+    # Fetch family history
+    logger.info(f"👨‍👩‍👧‍👦 Querying 'family_history' table for patientId: {patient_id}")
+    cursor.execute("SELECT * FROM family_history WHERE patientId = %s", (patient_id,))
+    family_history = cursor.fetchall()
+    logger.info(f"✅ Family history table: Found {len(family_history)} records")
+    
+    cursor.close()
+    
+    total_records = 1 + len(allergies) + len(problems) + len(medications) + len(encounters) + len(vitals) + len(laboratory) + len(family_history)
+    logger.info(f"🎯 Total records retrieved across all tables: {total_records}")
+    
+    return {
+        "patient": patient,
+        "allergies": allergies,
+        "problems": problems,
+        "medications": medications,
+        "encounters": encounters,
+        "vitals": vitals,
+        "laboratory": laboratory,
+        "family_history": family_history
+    }
+
+
+def convert_datetimes(obj):
+    if isinstance(obj, dict):
+        return {k: convert_datetimes(v) for k, v in obj.items()}
+    elif isinstance(obj, list):
+        return [convert_datetimes(i) for i in obj]
+    elif isinstance(obj, datetime):
+        return obj.isoformat()
+    elif isinstance(obj, date):
+        return obj.isoformat()
+    else:
+        return obj
+
+
+# Global MySQL connection (initialized at startup)
+mysql_connection = None
+
+def init_mysql_connection():
+    global mysql_connection
+    if mysql_connection is None or not mysql_connection.is_connected():
+        mysql_connection = mysql.connector.connect(
+            host=os.environ.get("MYSQL_HOST"),
+            user=os.environ.get("MYSQL_USERNAME"),
+            password=os.environ.get("MYSQL_PASSWORD"),
+            database=os.environ.get("MYSQL_DATABASE"),
+        )
+        logger.info("MySQL connection established at startup.")
+
+# Initialize MySQL connection at app startup
+init_mysql_connection()
+
+@router.post("/treatment-plan")
+async def generate_treatment_plan(request: TreatmentPlanRequest):
+    """Endpoint to fetch all patient data, use LLM to fill LaTeX, and return PDF."""
+    try:
+        # Use the global connection
+        global mysql_connection
+        if mysql_connection is None or not mysql_connection.is_connected():
+            init_mysql_connection()
+        connection = mysql_connection
+        patient_id = request.patient_id
+        cursor = connection.cursor(dictionary=True)
+        logger.info(f"🔍 [Stage 1] Starting comprehensive data retrieval for patient ID: {patient_id}")
+        # Fetch patient basic info
+        logger.info(f"📋 Querying 'patients' table for patient_id: {patient_id}")
+        cursor.execute("SELECT * FROM patients WHERE id = %s", (patient_id,))
+        patient = cursor.fetchone()
+        logger.info(f"✅ Patients table: Found {'1 record' if patient else '0 records'}")
+        # Fetch allergies
+        logger.info(f"🤧 Querying 'allergies' table for patientId: {patient_id}")
+        cursor.execute("SELECT * FROM allergies WHERE patientId = %s", (patient_id,))
+        allergies = cursor.fetchall()
+        logger.info(f"✅ Allergies table: Found {len(allergies)} records")
+        # Fetch problems
+        logger.info(f"🏥 Querying 'problem' table for patient_id: {patient_id}")
+        cursor.execute("SELECT * FROM problem WHERE patient_id = %s", (patient_id,))
+        problems = cursor.fetchall()
+        logger.info(f"✅ Problems table: Found {len(problems)} records")
+        # Fetch patient medications
+        logger.info(f"💊 Querying 'patient_medications' table for patient_id: {patient_id}")
+        cursor.execute("SELECT * FROM patient_medications WHERE patient_id = %s", (patient_id,))
+        medications = cursor.fetchall()
+        logger.info(f"✅ Patient medications table: Found {len(medications)} records")
+        # (patient_encounters table intentionally skipped)
+        # Fetch vitals
+        logger.info(f"❤️ Querying 'vitals' table for patientId: {patient_id}")
+        cursor.execute("SELECT * FROM vitals WHERE patientId = %s", (patient_id,))
+        vitals = cursor.fetchall()
+        logger.info(f"✅ Vitals table: Found {len(vitals)} records")
+        # Fetch laboratory results
+        logger.info(f"🔬 Querying 'laboratory' table for patientId: {patient_id}")
+        cursor.execute("SELECT * FROM laboratory WHERE patientId = %s", (patient_id,))
+        laboratory = cursor.fetchall()
+        logger.info(f"✅ Laboratory table: Found {len(laboratory)} records")
+        # Fetch family history
+        logger.info(f"👨‍👩‍👧‍👦 Querying 'family_history' table for patientId: {patient_id}")
+        cursor.execute("SELECT * FROM family_history WHERE patientId = %s", (patient_id,))
+        family_history = cursor.fetchall()
+        logger.info(f"✅ Family history table: Found {len(family_history)} records")
+        cursor.close()
+        logger.info(f"🎯 [Stage 1] Data retrieval complete for patient ID: {patient_id}")
+        # Stage 2: LLM - Understand and extract values
+        logger.info("🧠 [Stage 2] Sending patient data to LLM for understanding and value extraction...")
+        patient_data = {
+            "patient": patient,
+            "allergies": allergies,
+            "problems": problems,
+            "medications": medications,
+            "vitals": vitals,
+            "laboratory": laboratory,
+            "family_history": family_history
+        }
+        # Convert datetime objects to strings for JSON serialization
+        patient_data_serializable = convert_datetimes(patient_data)
+        llm = await LLMAgentFactory().create()
+        await llm._build_prompt()
+        await llm._create_agent()
+        # Prompt 1: Ask LLM to extract all relevant values from the data
+        prompt1 = (
+            "You are a medical data assistant. You will be given patient data in JSON format. "
+            "Your job is to extract and organize all relevant values (such as patient name, MRN, DOB, age, gender, doctor name, doctor ID, signature, chief complaint, problem list, allergies, vitals, medications, assessment plan, etc.) "
+            "that will be needed to fill a treatment plan document. "
+            "Return a JSON object with clear key-value pairs for each field that will be filled in the LaTeX template. "
+            "Do not generate any text or document, just the JSON mapping.\n\n"
+            f"PATIENT DATA:\n{json.dumps(patient_data_serializable)}"
+        )
+        extracted_values_json, _ = await llm.qa(prompt1, [])
+        logger.info(f"🧠 [Stage 2] LLM returned extracted values JSON: {extracted_values_json}")
+        # Parse the LLM's JSON output
+        try:
+            extracted_values = json.loads(extracted_values_json)
+        except Exception as e:
+            logger.error(f"Failed to parse LLM output as JSON: {e}")
+            logger.error(f"Raw LLM response: '{extracted_values_json}'")
+            # Try to extract JSON from the response if it contains explanatory text
+            import re
+            json_match = re.search(r'\{.*\}', extracted_values_json, re.DOTALL)
+            if json_match:
+                try:
+                    extracted_values = json.loads(json_match.group())
+                    logger.info("Successfully extracted JSON from LLM response using regex")
+                except Exception as e2:
+                    logger.error(f"Failed to parse extracted JSON: {e2}")
+                    raise HTTPException(status_code=500, detail="LLM did not return valid JSON for extracted values.")
+            else:
+                raise HTTPException(status_code=500, detail="LLM did not return valid JSON for extracted values.")
+        # Stage 3: LLM - Fill LaTeX template
+        logger.info("📄 [Stage 3] Sending LaTeX template and extracted values to LLM for filling...")
+        latex_template = r'''
+\\documentclass[10pt,a4paper]{article}
+\\usepackage[utf8]{inputenc}
+\\usepackage[margin=0.75in]{geometry}
+\\usepackage[table]{xcolor}
+\\usepackage{array}
+\\usepackage{titlesec}
+\\usepackage{enumitem}
+\\usepackage{tcolorbox}
+
+% Custom column types
+\\newcolumntype{L}[1]{>{\\raggedright\\arraybackslash}p{#1}}
+
+% Color definition
+\\definecolor{lightgray}{gray}{0.9}
+
+\\begin{document}
+
+% Title and Reference Number
+\\begin{center}
+\\Large\\textbf{TREATMENT PLAN} \\\\[6pt]
+\\small\\textbf{Reference \\#:} \\texttt{\\textbf{REF12345}}
+\\end{center}
+
+\\vspace{12pt}
+
+% Patient & Doctor Info Table
+\\noindent
+\\makebox[\\textwidth]{%
+\\begin{tabular}{|>{\\columncolor{lightgray}}L{0.22\\textwidth}|L{0.28\\textwidth}|>{\\columncolor{lightgray}}L{0.22\\textwidth}|L{0.28\\textwidth}|}
+\\hline
+\\textbf{Patient Name} & {{\\ }} & \\textbf{Date} & {{\\ }} \\\\ 
+\\hline
+\\textbf{MRN} & {{\\ }} & \\textbf{Doctor Name} & {{\\ }} \\\\ 
+\\hline
+\\textbf{DOB} & {{\\ }} & \\textbf{Doctor ID} & {{\\ }} \\\\ 
+\\hline
+\\textbf{Age} & {{\\ }} & \\textbf{Signature} & {{\\ }} \\\\ 
+\\hline
+\\textbf{Gender} & {{\\ }} & & \\\\ 
+\\hline
+\\end{tabular}
+}
+
+\\vspace{24pt}
+
+% Chief Complaint
+\\section*{Chief Complaint / Presenting Problem}
+\\vspace{6pt}
+\\noindent
+\\tcbset{colframe=black!50, colback=white, boxrule=0.5pt, arc=2pt, left=6pt, right=6pt, top=6pt, bottom=6pt}
+\\begin{tcolorbox}
+\\vspace{2em}
+\\end{tcolorbox}
+
+\\vspace{24pt}
+
+% Problem List
+\\section*{Problem List}
+\\vspace{6pt}
+\\begin{enumerate}[label=\\arabic*.]
+  \item \underline{\hspace{0.93\\textwidth}}
+  \item \underline{\hspace{0.93\\textwidth}}
+  \item \underline{\hspace{0.93\\textwidth}}
+  \item \underline{\hspace{0.93\\textwidth}}
+\\end{enumerate}
+
+\\vspace{24pt}
+
+% Allergies
+\\section*{Allergies}
+\\vspace{6pt}
+\\noindent
+\\makebox[\\textwidth]{%
+\\begin{tabular}{|>{\\columncolor{lightgray}}L{0.33\\textwidth}|>{\\columncolor{lightgray}}L{0.33\\textwidth}|>{\\columncolor{lightgray}}L{0.33\\textwidth}|}
+\\hline
+\\textbf{Allergy Name} & \\textbf{Allergy Type} & \\textbf{Severity Level} \\\\ 
+\\hline
+\\end{tabular}
+}
+\\noindent
+\\makebox[\\textwidth]{%
+\\begin{tabular}{|L{0.33\\textwidth}|L{0.33\\textwidth}|L{0.33\\textwidth}|}
+\\hline
+{{\\ }} & {{\\ }} & {{\\ }} \\\\ 
+\\hline
+{{\\ }} & {{\\ }} & {{\\ }} \\\\ 
+\\hline
+{{\\ }} & {{\\ }} & {{\\ }} \\\\ 
+\\hline
+\\end{tabular}
+}
+
+\\vspace{24pt}
+
+% Vitals
+\\section*{Vitals}
+\\vspace{6pt}
+\\noindent
+\\makebox[\\textwidth]{%
+\\begin{tabular}{|>{\\columncolor{lightgray}}L{0.19\\textwidth}|>{\\columncolor{lightgray}}L{0.19\\textwidth}|>{\\columncolor{lightgray}}L{0.19\\textwidth}|>{\\columncolor{lightgray}}L{0.19\\textwidth}|>{\\columncolor{lightgray}}L{0.19\\textwidth}|}
+\\hline
+\\textbf{Height} & \\textbf{Weight} & \\textbf{BMI} & \\textbf{Heart Rate} & \\textbf{Blood Pressure} \\\\ 
+\\hline
+\\end{tabular}
+}
+\\noindent
+\\makebox[\\textwidth]{%
+\\begin{tabular}{|L{0.19\\textwidth}|L{0.19\\textwidth}|L{0.19\\textwidth}|L{0.19\\textwidth}|L{0.19\\textwidth}|}
+\\hline
+{{\\ }} & {{\\ }} & {{\\ }} & {{\\ }} & {{\\ }} \\\\ 
+\\hline
+\\end{tabular}
+}
+\\vspace{4pt}
+\\noindent
+{\\footnotesize \\textit{Vitals recorded on: \underline{\hspace{5cm}}}}
+
+\\vspace{24pt}
+
+% Active Medications
+\\section*{Active Medications}
+\\vspace{6pt}
+\\noindent
+\\makebox[\\textwidth]{%
+\\begin{tabular}{|>{\\columncolor{lightgray}}L{0.2\\textwidth}|>{\\columncolor{lightgray}}L{0.12\\textwidth}|>{\\columncolor{lightgray}}L{0.2\\textwidth}|>{\\columncolor{lightgray}}L{0.2\\textwidth}|>{\\columncolor{lightgray}}L{0.28\\textwidth}|}
+\\hline
+\\textbf{Medication Name} & \\textbf{Qty} & \\textbf{Dosage Timings} & \\textbf{Reason} & \\textbf{Description} \\\\ 
+\\hline
+\\end{tabular}
+}
+\\noindent
+\\makebox[\\textwidth]{%
+\\begin{tabular}{|L{0.2\\textwidth}|L{0.12\\textwidth}|L{0.2\\textwidth}|L{0.2\\textwidth}|L{0.28\\textwidth}|}
+\\hline
+{{\\ }} & {{\\ }} & {{\\ }} & {{\\ }} & {{\\ }} \\\\ 
+\\hline
+{{\\ }} & {{\\ }} & {{\\ }} & {{\\ }} & {{\\ }} \\\\ 
+\\hline
+\\end{tabular}
+}
+
+\\vspace{24pt}
+
+% Assessment Plan
+\\section*{Assessment Plan}
+\\vspace{6pt}
+\\noindent
+\\makebox[\\textwidth]{%
+\\begin{tabular}{|>{\\columncolor{lightgray}}L{0.4\\textwidth}|>{\\columncolor{lightgray}}L{0.3\\textwidth}|>{\\columncolor{lightgray}}L{0.3\\textwidth}|}
+\\hline
+\\textbf{Assessment Type} & \\textbf{Scheduled Date} & \\textbf{Doctor's Signature} \\\\ 
+\\hline
+\\end{tabular}
+}
+\\noindent
+\\makebox[\\textwidth]{%
+\\begin{tabular}{|L{0.4\\textwidth}|L{0.3\\textwidth}|L{0.3\\textwidth}|}
+\\hline
+{{\\ }} & {{\\ }} & {{\\ }} \\\\ 
+\\hline
+{{\\ }} & {{\\ }} & {{\\ }} \\\\ 
+\\hline
+\\end{tabular}
+}
+
+\\end{document}
+'''
+        prompt2 = (
+            r"You are a LaTeX document assistant. You will be given a LaTeX template and a JSON object containing all the values to fill. "
+            r"Replace only the placeholders (the {{ ... }} parts) in the LaTeX template with the correct values from the JSON. "
+            r"Do not change the structure, formatting, or add/remove any sections. Return only the filled LaTeX code. If the JSON field is an array of objects for a table, generate one table row per object using the same column structure defined in the LaTeX template. Only the first row should keep the header formatting (e.g., gray background). Do not change the column widths or formatting. If the placeholder is in a numbered list and the corresponding JSON value is an array of strings, create one list item per array element using the same list formatting and numbering. Each item should replace one \item \underline{...} with \item <value>.\n\n"
+            f"LATEX TEMPLATE:\n{latex_template}\n\nVALUES JSON:\n{json.dumps(extracted_values)}"
+        )
+        filled_latex, _ = await llm.qa(prompt2, [])
+        logger.info(f"📄 [Stage 3] LLM returned filled LaTeX document.")
+        # Clean the LaTeX output by removing Markdown code block markers if present
+        import re
+        filled_latex_clean = re.sub(r'^`{3,}.*?\n', '', filled_latex, flags=re.DOTALL)  # Remove opening ```latex or ```
+        filled_latex_clean = re.sub(r'`{3,}\s*$', '', filled_latex_clean, flags=re.DOTALL)  # Remove closing ```
+        logger.info(f"📄 [Stage 3] Cleaned LaTeX output (removed Markdown markers if present)")
+        # Stage 4: Generate AI suggestions for Assessment Plan
+        logger.info("🤖 [Stage 4] Generating AI suggestions for Assessment Plan...")
+        assessment_prompt = (
+            "You are a medical AI assistant. Based on the patient data provided, suggest an appropriate assessment plan. "
+            "Consider the patient's medical history, current problems, medications, vitals, and laboratory results. "
+            "Return only a JSON array of assessment objects, each with 'assessment_type', 'scheduled_date', and 'doctors_signature' fields. "
+            "Be specific and realistic with assessment types (e.g., 'Blood Pressure Monitoring', 'Cardiac Stress Test', 'Diabetes Management Review'). "
+            "Use today's date as the scheduled date for immediate assessments, or suggest appropriate future dates. "
+            "For doctor's signature, use 'Dr. [Specialty]' format.\n\n"
+            f"PATIENT DATA:\n{json.dumps(patient_data_serializable)}"
+        )
+        assessment_suggestions_json, _ = await llm.qa(assessment_prompt, [])
+        logger.info(f"🤖 [Stage 4] AI generated assessment suggestions: {assessment_suggestions_json}")
+        # Parse assessment suggestions
+        try:
+            assessment_suggestions = json.loads(assessment_suggestions_json)
+        except Exception as e:
+            logger.error(f"Failed to parse assessment suggestions as JSON: {e}")
+            logger.error(f"Raw assessment response: '{assessment_suggestions_json}'")
+            # Try to extract JSON from the response if it contains explanatory text
+            json_match = re.search(r'\[.*\]', assessment_suggestions_json, re.DOTALL)
+            if json_match:
+                try:
+                    assessment_suggestions = json.loads(json_match.group())
+                    logger.info("Successfully extracted assessment JSON from LLM response using regex")
+                except Exception as e2:
+                    logger.error(f"Failed to parse extracted assessment JSON: {e2}")
+                    assessment_suggestions = []
+            else:
+                assessment_suggestions = []
+        # Insert assessment suggestions into LaTeX
+        if assessment_suggestions:
+            # Find the Assessment Plan section and replace the empty table rows
+            assessment_table_rows = ""
+            for i, assessment in enumerate(assessment_suggestions):
+                assessment_type = assessment.get('assessment_type', '')
+                scheduled_date = assessment.get('scheduled_date', '')
+                doctors_signature = assessment.get('doctors_signature', '')
+                assessment_table_rows += f"{assessment_type} & {scheduled_date} & {doctors_signature} \\\\ \\hline\n"
+            # Replace the empty assessment table rows in the LaTeX using string replacement
+            old_table_rows = "\\hline\n{{ }} & {{ }} & {{ }} \\\\ \\hline\n{{ }} & {{ }} & {{ }} \\\\ \\hline"
+            new_table_rows = f"\\hline\n{assessment_table_rows}"
+            filled_latex_clean = filled_latex_clean.replace(old_table_rows, new_table_rows)
+            logger.info(f"🤖 [Stage 4] Inserted {len(assessment_suggestions)} assessment suggestions into LaTeX")
+        # Stage 5: Return LaTeX document as text file
+        logger.info("📄 [Stage 5] Returning filled LaTeX document as text file...")
+        import tempfile
+        with tempfile.NamedTemporaryFile(delete=False, mode="w", suffix=".tex") as tmp_file:
+            tmp_file.write(filled_latex_clean)
+            tex_path = tmp_file.name
+        logger.info(f"📄 [Stage 5] LaTeX document saved to {tex_path}")
+        from fastapi.responses import FileResponse
+        return FileResponse(tex_path, filename="treatment_plan.tex", media_type="application/x-tex")
+    except Exception as e:
+        logger.error(traceback.format_exc())
+        raise HTTPException(status_code=500, detail=str(e))
 
 
