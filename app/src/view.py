@@ -10,7 +10,7 @@ from fastapi.responses import HTMLResponse
 from fastapi.security import OAuth2PasswordBearer
 # from firebase_admin.auth import UserRecord
 from app.src.rating import add_rating_data
-from app.src.data_types import ChangeRole, Conversation, Rating, Query, UpdateUser, Prompt, DeleteFile, ActiveFile
+from app.src.data_types import ChangeRole, Conversation, Rating, Query, UpdateUser, Prompt, DeleteFile, ActiveFile, TreatmentPlanRequest
 from .modules.databases import ConversationDB
 from .modules.services import LLMAgentFactory
 from .modules.auth import Authentication
@@ -23,6 +23,8 @@ from redis import asyncio as aioredis
 import app.src.error_messages as error_messages
 from app.src.modules.databases import PGVectorManager
 from pydantic import BaseModel
+import mysql.connector
+from datetime import datetime, date
 
 oauth2scheme = OAuth2PasswordBearer(
     tokenUrl="token",
@@ -667,4 +669,279 @@ class DrugQuery(BaseModel):
 #         logger.error(traceback.format_exc())
 #         raise HTTPException(status_code=500, detail="Internal server error")
 
+def convert_datetimes(obj):
+    """Convert datetime objects to strings for JSON serialization"""
+    if isinstance(obj, dict):
+        return {k: convert_datetimes(v) for k, v in obj.items()}
+    elif isinstance(obj, list):
+        return [convert_datetimes(i) for i in obj]
+    elif isinstance(obj, datetime):
+        return obj.isoformat()
+    elif isinstance(obj, date):
+        return obj.isoformat()
+    else:
+        return obj
+
+
+@router.post("/treatment-plan")
+async def generate_treatment_plan(request: TreatmentPlanRequest):
+    """Endpoint to fetch all patient data, use LLM to fill LaTeX, and return PDF."""
+    try:
+        # Step 1: Connect to MySQL
+        global mysql_connection
+        if mysql_connection is None or not mysql_connection.is_connected():
+            init_mysql_connection()
+        connection = mysql_connection
+        patient_id = request.patient_id
+        cursor = connection.cursor(dictionary=True)
+
+        # Step 2: Fetch all patient-related data
+        cursor.execute("SELECT * FROM patients WHERE id = %s", (patient_id,))
+        patient = cursor.fetchone()
+        cursor.execute("SELECT * FROM allergies WHERE patientId = %s", (patient_id,))
+        allergies = cursor.fetchall()
+        cursor.execute("SELECT * FROM problem WHERE patient_id = %s", (patient_id,))
+        problems = cursor.fetchall()
+        cursor.execute("SELECT * FROM patient_medications WHERE patient_id = %s", (patient_id,))
+        medications = cursor.fetchall()
+        cursor.execute("SELECT * FROM vitals WHERE patientId = %s", (patient_id,))
+        vitals = cursor.fetchall()
+        cursor.execute("SELECT * FROM laboratory WHERE patientId = %s", (patient_id,))
+        laboratory = cursor.fetchall()
+        cursor.execute("SELECT * FROM family_history WHERE patientId = %s", (patient_id,))
+        family_history = cursor.fetchall()
+        cursor.close()
+
+        patient_data = {
+            "patient": patient,
+            "allergies": allergies,
+            "problems": problems,
+            "medications": medications,
+            "vitals": vitals,
+            "laboratory": laboratory,
+            "family_history": family_history
+        }
+        patient_data_serializable = convert_datetimes(patient_data)
+
+        # Step 3: Ask LLM to extract structured values
+        llm = await LLMAgentFactory().create()
+        await llm._build_prompt()
+        await llm._create_agent()
+        prompt1 = (
+            "You are a medical data assistant. Extract structured key-value data from the following patient record. "
+            "Return only a valid JSON object for LaTeX template filling.\n\n"
+            f"PATIENT DATA:\n{json.dumps(patient_data_serializable)}"
+        )
+        extracted_values_json, _ = await llm.qa(prompt1, [])
+        try:
+            extracted_values = json.loads(extracted_values_json)
+        except Exception:
+            import re
+            json_match = re.search(r'\{.*\}', extracted_values_json, re.DOTALL)
+            if json_match:
+                extracted_values = json.loads(json_match.group())
+            else:
+                raise HTTPException(status_code=500, detail="LLM did not return valid JSON.")
+
+        # Step 4: Fill LaTeX template
+        latex_template = r'''
+\documentclass[10pt,a4paper]{article}
+\usepackage[utf8]{inputenc}
+\usepackage[margin=0.75in]{geometry}
+\usepackage[table]{xcolor}
+\usepackage{array}
+\usepackage{titlesec}
+\usepackage{enumitem}
+\usepackage{tcolorbox}
+\newcolumntype{L}[1]{>{\raggedright\arraybackslash}p{#1}}
+\definecolor{lightgray}{gray}{0.9}
+\begin{document}
+
+\begin{center}
+\Large\textbf{TREATMENT PLAN} \\\\[6pt]
+\small\textbf{Reference \#:} \texttt{\textbf{REF12345}}
+\end{center}
+\vspace{12pt}
+
+\noindent
+\makebox[\textwidth]{%
+\begin{tabular}{|>{\columncolor{lightgray}}L{0.22\textwidth}|L{0.28\textwidth}|>{\columncolor{lightgray}}L{0.22\textwidth}|L{0.28\textwidth}|}
+\hline
+\textbf{Patient Name} & {{\ }} & \textbf{Date} & {{\ }} \\\\ 
+\hline
+\textbf{MRN} & {{\ }} & \textbf{Doctor Name} & {{\ }} \\\\ 
+\hline
+\textbf{DOB} & {{\ }} & \textbf{Doctor ID} & {{\ }} \\\\ 
+\hline
+\textbf{Age} & {{\ }} & \textbf{Signature} & {{\ }} \\\\ 
+\hline
+\textbf{Gender} & {{\ }} & & \\\\ 
+\hline
+\end{tabular}
+}
+
+\vspace{24pt}
+
+\section*{Chief Complaint / Presenting Problem}
+\vspace{6pt}
+\begin{tcolorbox}
+\vspace{2em}
+\end{tcolorbox}
+
+\vspace{24pt}
+
+\section*{Problem List}
+\begin{enumerate}[label=\arabic*.]
+  \item \underline{\hspace{0.93\textwidth}}
+  \item \underline{\hspace{0.93\textwidth}}
+  \item \underline{\hspace{0.93\textwidth}}
+  \item \underline{\hspace{0.93\textwidth}}
+\end{enumerate}
+
+\vspace{24pt}
+
+\section*{Allergies}
+\makebox[\textwidth]{%
+\begin{tabular}{|>{\columncolor{lightgray}}L{0.33\textwidth}|>{\columncolor{lightgray}}L{0.33\textwidth}|>{\columncolor{lightgray}}L{0.33\textwidth}|}
+\hline
+\textbf{Allergy Name} & \textbf{Allergy Type} & \textbf{Severity Level} \\\\ 
+\hline
+\end{tabular}
+}
+\makebox[\textwidth]{%
+\begin{tabular}{|L{0.33\textwidth}|L{0.33\textwidth}|L{0.33\textwidth}|}
+\hline
+{{\ }} & {{\ }} & {{\ }} \\\\ 
+\hline
+{{\ }} & {{\ }} & {{\ }} \\\\ 
+\hline
+{{\ }} & {{\ }} & {{\ }} \\\\ 
+\hline
+\end{tabular}
+}
+
+\vspace{24pt}
+
+\section*{Vitals}
+\makebox[\textwidth]{%
+\begin{tabular}{|>{\columncolor{lightgray}}L{0.19\textwidth}|>{\columncolor{lightgray}}L{0.19\textwidth}|>{\columncolor{lightgray}}L{0.19\textwidth}|>{\columncolor{lightgray}}L{0.19\textwidth}|>{\columncolor{lightgray}}L{0.19\textwidth}|}
+\hline
+\textbf{Height} & \textbf{Weight} & \textbf{BMI} & \textbf{Heart Rate} & \textbf{Blood Pressure} \\\\ 
+\hline
+\end{tabular}
+}
+\makebox[\textwidth]{%
+\begin{tabular}{|L{0.19\textwidth}|L{0.19\textwidth}|L{0.19\textwidth}|L{0.19\textwidth}|L{0.19\textwidth}|}
+\hline
+{{\ }} & {{\ }} & {{\ }} & {{\ }} & {{\ }} \\\\ 
+\hline
+\end{tabular}
+}
+\vspace{4pt}
+{\footnotesize \textit{Vitals recorded on: \underline{\hspace{5cm}}}}
+
+\vspace{24pt}
+
+\section*{Active Medications}
+\makebox[\textwidth]{%
+\begin{tabular}{|>{\columncolor{lightgray}}L{0.2\textwidth}|>{\columncolor{lightgray}}L{0.12\textwidth}|>{\columncolor{lightgray}}L{0.2\textwidth}|>{\columncolor{lightgray}}L{0.2\textwidth}|>{\columncolor{lightgray}}L{0.28\textwidth}|}
+\hline
+\textbf{Medication Name} & \textbf{Qty} & \textbf{Dosage Timings} & \textbf{Reason} & \textbf{Description} \\\\ 
+\hline
+\end{tabular}
+}
+\makebox[\textwidth]{%
+\begin{tabular}{|L{0.2\textwidth}|L{0.12\textwidth}|L{0.2\textwidth}|L{0.2\textwidth}|L{0.28\textwidth}|}
+\hline
+{{\ }} & {{\ }} & {{\ }} & {{\ }} & {{\ }} \\\\ 
+\hline
+{{\ }} & {{\ }} & {{\ }} & {{\ }} & {{\ }} \\\\ 
+\hline
+\end{tabular}
+}
+
+\vspace{24pt}
+
+\section*{Assessment Plan}
+\begin{itemize}
+  \item {{\ }}
+  \item {{\ }}
+  \item {{\ }}
+  \item {{\ }}
+\end{itemize}
+
+\end{document}
+'''
+        prompt2 = (
+            "You are a LaTeX assistant. Replace all {{ ... }} placeholders in the LaTeX template below using the JSON values provided. "
+            "Return ONLY the filled LaTeX code - no markdown formatting, no explanations, no code blocks. "
+            "For bullet lists like Assessment Plan, use \\item Description — Timeline: ..., Quantity: ... if applicable.\n\n"
+            f"LATEX TEMPLATE:\n{latex_template}\n\nVALUES JSON:\n{json.dumps(extracted_values)}"
+        )
+        filled_latex, _ = await llm.qa(prompt2, [])
+
+        # Step 5: Generate assessment plan
+        assessment_prompt = (
+            "You are a medical AI assistant. Based on this patient data, return ONLY a JSON array of 3–5 assessment steps. "
+            "Each step must have 'step_description', 'timeline', and optionally 'quantity' (only for medications). "
+            "Return only the JSON array - no explanations, no markdown formatting, no code blocks.\n\n"
+            f"{json.dumps(patient_data_serializable)}"
+        )
+        assessment_response, _ = await llm.qa(assessment_prompt, [])
+        import re
+        match = re.search(r'\[.*\]', assessment_response, re.DOTALL)
+        assessment_steps = json.loads(match.group()) if match else []
+
+        # Step 6: Insert assessment items into LaTeX
+        bullet_items = ""
+        for step in assessment_steps:
+            desc = step.get("step_description", "").strip()
+            timeline = step.get("timeline", "").strip()
+            quantity = step.get("quantity", "")
+            quantity = str(quantity).strip() if quantity else ""
+            if quantity and "medication" in desc.lower():
+                full = f"{desc} — Timeline: {timeline}, Quantity: {quantity}"
+            else:
+                full = f"{desc} — Timeline: {timeline}"
+            bullet_items += f"  \\item {full}\n"
+
+        # Replace itemize block with actual bullet points
+        filled_latex = re.sub(
+            r"\\begin{itemize}.*?\\end{itemize}",
+            lambda m: f"\\begin{{itemize}}\n{bullet_items}\\end{{itemize}}",
+            filled_latex,
+            flags=re.DOTALL
+        )
+        filled_latex = re.sub(r'^```latex\n|```$', '', filled_latex.strip(), flags=re.MULTILINE)
+
+        # Step 7: Return LaTeX file
+        import tempfile
+        with tempfile.NamedTemporaryFile(delete=False, mode="w", suffix=".tex") as tmp_file:
+            tmp_file.write(filled_latex)
+            tex_path = tmp_file.name
+
+        from fastapi.responses import FileResponse
+        return FileResponse(tex_path, filename="treatment_plan.tex", media_type="application/x-tex")
+
+    except Exception as e:
+        logger.error(traceback.format_exc())
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# Global MySQL connection (initialized at startup)
+mysql_connection = None
+
+def init_mysql_connection():
+    global mysql_connection
+    if mysql_connection is None or not mysql_connection.is_connected():
+        mysql_connection = mysql.connector.connect(
+            host=os.environ.get("MYSQL_HOST"),
+            user=os.environ.get("MYSQL_USERNAME"),
+            password=os.environ.get("MYSQL_PASSWORD"),
+            database=os.environ.get("MYSQL_DATABASE"),
+        )
+        logger.info("MySQL connection established at startup.")
+
+# Initialize MySQL connection at app startup
+init_mysql_connection()
 

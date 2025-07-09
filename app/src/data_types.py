@@ -138,3 +138,7 @@ class UpdateUser(BaseModel):
     department: Union[str, None]
     role: Union[str, None]
     time: Union[str, None]
+
+
+class TreatmentPlanRequest(BaseModel):
+    patient_id: int
