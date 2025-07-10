@@ -25,6 +25,10 @@ from app.src.modules.databases import PGVectorManager
 from pydantic import BaseModel
 import mysql.connector
 from datetime import datetime, date
+import subprocess
+import tempfile
+from fastapi.responses import FileResponse, Response
+from io import BytesIO
 
 oauth2scheme = OAuth2PasswordBearer(
     tokenUrl="token",
@@ -875,15 +879,15 @@ async def generate_treatment_plan(request: TreatmentPlanRequest):
         prompt2 = (
             "You are a LaTeX assistant. Replace all {{ ... }} placeholders in the LaTeX template below using the JSON values provided. "
             "Return ONLY the filled LaTeX code - no markdown formatting, no explanations, no code blocks. "
-            "For bullet lists like Assessment Plan, use \\item Description — Timeline: ..., Quantity: ... if applicable.\n\n"
+            "For bullet lists like Assessment Plan, use \\item Description — Timeline: ..., \n\n"
             f"LATEX TEMPLATE:\n{latex_template}\n\nVALUES JSON:\n{json.dumps(extracted_values)}"
         )
         filled_latex, _ = await llm.qa(prompt2, [])
 
         # Step 5: Generate assessment plan
         assessment_prompt = (
-            "You are a medical AI assistant. Based on this patient data, return ONLY a JSON array of 3–5 assessment steps. "
-            "Each step must have 'step_description', 'timeline', and optionally 'quantity' (only for medications). "
+            "You are a medical AI assistant. Based on this patient data, return ONLY a JSON array of 7 to 10 assessment steps. "
+            "Each step must have 'step_description', 'timeline'"
             "Return only the JSON array - no explanations, no markdown formatting, no code blocks.\n\n"
             f"{json.dumps(patient_data_serializable)}"
         )
@@ -914,14 +918,21 @@ async def generate_treatment_plan(request: TreatmentPlanRequest):
         )
         filled_latex = re.sub(r'^```latex\n|```$', '', filled_latex.strip(), flags=re.MULTILINE)
 
-        # Step 7: Return LaTeX file
-        import tempfile
-        with tempfile.NamedTemporaryFile(delete=False, mode="w", suffix=".tex") as tmp_file:
-            tmp_file.write(filled_latex)
-            tex_path = tmp_file.name
-
-        from fastapi.responses import FileResponse
-        return FileResponse(tex_path, filename="treatment_plan.tex", media_type="application/x-tex")
+        # Step 7: Convert LaTeX to PDF and return
+        try:
+            pdf_bytes = latex_to_pdf(filled_latex)
+            return Response(
+                content=pdf_bytes,
+                media_type="application/pdf",
+                headers={"Content-Disposition": "attachment; filename=treatment_plan.pdf"}
+            )
+        except HTTPException:
+            # If PDF generation fails, fall back to returning LaTeX file
+            logger.warning("PDF generation failed, falling back to LaTeX file")
+            with tempfile.NamedTemporaryFile(delete=False, mode="w", suffix=".tex") as tmp_file:
+                tmp_file.write(filled_latex)
+                tex_path = tmp_file.name
+            return FileResponse(tex_path, filename="treatment_plan.tex", media_type="application/x-tex")
 
     except Exception as e:
         logger.error(traceback.format_exc())
@@ -941,6 +952,50 @@ def init_mysql_connection():
             database=os.environ.get("MYSQL_DATABASE"),
         )
         logger.info("MySQL connection established at startup.")
+
+def latex_to_pdf(latex_content: str) -> bytes:
+    """
+    Convert LaTeX content to PDF using pdflatex
+    Returns PDF bytes or raises HTTPException on failure
+    """
+    try:
+        # Create temporary directory for LaTeX compilation
+        with tempfile.TemporaryDirectory() as temp_dir:
+            # Write LaTeX content to temporary file
+            tex_file_path = os.path.join(temp_dir, "document.tex")
+            with open(tex_file_path, 'w', encoding='utf-8') as f:
+                f.write(latex_content)
+            
+            # Run pdflatex to compile the document
+            result = subprocess.run(
+                ['pdflatex', '-interaction=nonstopmode', '-output-directory', temp_dir, tex_file_path],
+                capture_output=True,
+                text=True,
+                timeout=30  # 30 second timeout
+            )
+            
+            # Check if compilation was successful
+            pdf_file_path = os.path.join(temp_dir, "document.pdf")
+            if not os.path.exists(pdf_file_path):
+                logger.error(f"LaTeX compilation failed: {result.stderr}")
+                raise HTTPException(status_code=500, detail="LaTeX compilation failed")
+            
+            # Read the generated PDF
+            with open(pdf_file_path, 'rb') as f:
+                pdf_bytes = f.read()
+            
+            return pdf_bytes
+            
+    except subprocess.TimeoutExpired:
+        logger.error("LaTeX compilation timed out")
+        raise HTTPException(status_code=500, detail="LaTeX compilation timed out")
+    except FileNotFoundError:
+        logger.error("pdflatex not found. Please install LaTeX distribution (e.g., TeX Live)")
+        raise HTTPException(status_code=500, detail="LaTeX distribution not installed")
+    except Exception as e:
+        logger.error(f"Error in LaTeX to PDF conversion: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"PDF generation failed: {str(e)}")
+
 
 # Initialize MySQL connection at app startup
 init_mysql_connection()
