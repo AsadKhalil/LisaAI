@@ -25,6 +25,8 @@ langchain-aws = "^0.1.16"
 pymupdf4llm = {git = "https://github.com/ibraheem-111/RAG.git", subdirectory = "pymupdf4llm"}
 exceptiongroup = "^1.2.2"
 mysql-connector-python = "^9.3.0"
+reportlab = "^4.4.2"
+subprocess32 = "^3.5.4"
 
 
 [build-system]
