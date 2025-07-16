@@ -142,3 +142,7 @@ class UpdateUser(BaseModel):
 
 class TreatmentPlanRequest(BaseModel):
     patient_id: int
+    doctor_name: str
+    doctor_id: str
+    organization_id: str
+    reference_number: str
