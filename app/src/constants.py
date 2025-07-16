@@ -12,7 +12,7 @@ EMPLOYEE_ROLE = "Employee"
 
 EMBEDDINGS_MODEL = "text-embedding-3-large"
 
-OPENAI_MODELS = ["gpt-3.5-turbo-0125", "gpt-4o", "gpt-4o-mini"]
+OPENAI_MODELS = ["gpt-3.5-turbo-0125", "gpt-4o", "gpt-4o-mini", "gpt-3.5-turbo"]
 BEDROCK_MODELS = ["meta.llama3-1-70b-instruct-v1:0"]
 
 

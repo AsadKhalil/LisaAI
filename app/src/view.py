@@ -1,4 +1,5 @@
 import json
+import re
 import logging
 import sys
 import traceback
@@ -12,7 +13,7 @@ from fastapi.security import OAuth2PasswordBearer
 from app.src.rating import add_rating_data
 from app.src.data_types import ChangeRole, Conversation, Rating, Query, UpdateUser, Prompt, DeleteFile, ActiveFile, TreatmentPlanRequest
 from .modules.databases import ConversationDB
-from .modules.services import LLMAgentFactory
+from .modules.services import LLMAgentFactory, simple_openai_chat
 from .modules.auth import Authentication
 from .modules.aws import AWS
 from dotenv import load_dotenv
@@ -29,6 +30,9 @@ import subprocess
 import tempfile
 from fastapi.responses import FileResponse, Response
 from io import BytesIO
+from jinja2 import Template, Environment
+import random
+import string
 
 oauth2scheme = OAuth2PasswordBearer(
     tokenUrl="token",
@@ -687,67 +691,125 @@ def convert_datetimes(obj):
         return obj
 
 
+def filter_patient_data(patient, allergies, problems, medications, vitals, laboratory, family_history, doctor_name=None, doctor_id=None):
+    # Ensure both 'firstName' and 'name' are supported for patient name
+    patient_name = patient.get("firstName")
+    filtered = {
+        "patient": {
+            "name": patient_name,
+            "id": patient.get("id"),
+            "dob": "",
+            "gender": "Male" if patient.get("sexAtBirthCode") == "gender_at_birth_male" else "Female" if patient.get("sexAtBirthCode") == "gender_at_birth_female" else "other",
+        },
+        "doctor": {
+            "name": doctor_name,
+            "id": doctor_id,
+            "signature": ""
+        },
+        "problems": [
+            {"description": p.get("problemorissue")} for p in problems
+        ] if problems else [{"description": None}],
+        "allergies": [
+            {
+                "name": a.get("allergy"),
+                "type": a.get("allergytype"),
+                "severity": a.get("severitiesCode")
+            }
+            for a in allergies
+        ] if allergies else [{"name": None, "type": None, "severity": None}],
+        "vitals": [
+            {
+                "height": v.get("heightFt") + 'ft' + v.get("heightIn") + 'in' if v.get("heightFt") and v.get("heightIn") else None,
+                "weight": v.get("weightKilo") + '.' + v.get("weightGram") + v.get("weightUnit") if v.get("weightKilo") and v.get("weightGram") and v.get("weightUnit") else None,
+                "bmi": v.get("bmi"),
+                "heart_rate": v.get("pulseBpm"),
+                "blood_pressure": v.get("systolicBloodPressure") + '/' + v.get("diastolicBloodPressure") if v.get("systolicBloodPressure") and v.get("diastolicBloodPressure") else None,
+                "date": v.get("recordDate")
+            }
+            for v in vitals
+        ] if vitals else [{"height": None, "weight": None, "bmi": None, "heart_rate": None, "blood_pressure": None, "date": None}],
+        "medications": [
+            {
+                "name": m.get("drugname"),
+                "qty": m.get("quantity"),
+                "dosage": m.get("dose"),
+                "reason": m.get("reason"),
+                "instruction": m.get("instruction")
+            }
+            for m in medications
+        ] if medications else [{"name": None, "qty": None, "dosage": None, "reason": None, "instruction": None}]
+    }
+    def clean(obj):
+        if isinstance(obj, dict):
+            return {k: clean(v) for k, v in obj.items() if v not in [None, "", [], {}]}
+        elif isinstance(obj, list):
+            return [clean(i) for i in obj if i not in [None, "", [], {}]]
+        else:
+            return obj
+    return clean(filtered)
+
+
 @router.post("/treatment-plan")
 async def generate_treatment_plan(request: TreatmentPlanRequest):
-    """Endpoint to fetch all patient data, use LLM to fill LaTeX, and return PDF."""
+
     try:
-        # Step 1: Connect to MySQL
+        t0 = time.time()
         global mysql_connection
         if mysql_connection is None or not mysql_connection.is_connected():
             init_mysql_connection()
         connection = mysql_connection
         patient_id = request.patient_id
+        doctor_name = request.doctor_name
+        doctor_id = request.doctor_id
+        organization_id = request.organization_id
+        reference_number = request.reference_number
         cursor = connection.cursor(dictionary=True)
 
-        # Step 2: Fetch all patient-related data
         cursor.execute("SELECT * FROM patients WHERE id = %s", (patient_id,))
+
         patient = cursor.fetchone()
+
         cursor.execute("SELECT * FROM allergies WHERE patientId = %s", (patient_id,))
+
         allergies = cursor.fetchall()
+
         cursor.execute("SELECT * FROM problem WHERE patient_id = %s", (patient_id,))
+
         problems = cursor.fetchall()
+
         cursor.execute("SELECT * FROM patient_medications WHERE patient_id = %s", (patient_id,))
+
         medications = cursor.fetchall()
+
         cursor.execute("SELECT * FROM vitals WHERE patientId = %s", (patient_id,))
+
         vitals = cursor.fetchall()
+
         cursor.execute("SELECT * FROM laboratory WHERE patientId = %s", (patient_id,))
+
         laboratory = cursor.fetchall()
+
         cursor.execute("SELECT * FROM family_history WHERE patientId = %s", (patient_id,))
+
         family_history = cursor.fetchall()
+
         cursor.close()
 
-        patient_data = {
-            "patient": patient,
-            "allergies": allergies,
-            "problems": problems,
-            "medications": medications,
-            "vitals": vitals,
-            "laboratory": laboratory,
-            "family_history": family_history
-        }
-        patient_data_serializable = convert_datetimes(patient_data)
+        t1 = time.time()
+        logger.info(f"MySQL fetch took {t1-t0:.2f}s")
 
-        # Step 3: Ask LLM to extract structured values
-        llm = await LLMAgentFactory().create()
-        await llm._build_prompt()
-        await llm._create_agent()
-        prompt1 = (
-            "You are a medical data assistant. Extract structured key-value data from the following patient record. "
-            "Return only a valid JSON object for LaTeX template filling.\n\n"
-            f"PATIENT DATA:\n{json.dumps(patient_data_serializable)}"
-        )
-        extracted_values_json, _ = await llm.qa(prompt1, [])
-        try:
-            extracted_values = json.loads(extracted_values_json)
-        except Exception:
-            import re
-            json_match = re.search(r'\{.*\}', extracted_values_json, re.DOTALL)
-            if json_match:
-                extracted_values = json.loads(json_match.group())
-            else:
-                raise HTTPException(status_code=500, detail="LLM did not return valid JSON.")
+        # Prepare filtered data for template
+        filtered_data = filter_patient_data(patient, allergies, problems, medications, vitals, laboratory, family_history, doctor_name=doctor_name, doctor_id=doctor_id)
+        patient_data_serializable = convert_datetimes(filtered_data) # This line now has purpose with datetime conversion placeholder
 
-        # Step 4: Fill LaTeX template
+        # Debug log patient data before rendering
+        logger.info(f"Patient data for template: {filtered_data['patient']}")
+        logger.info(f"allergies data for template: {filtered_data['allergies']}")
+        logger.info(f"doctor data for template: {filtered_data['doctor']}")
+        logger.info(f"problem data for template: {filtered_data['problems']}")
+        logger.info(f"vitals data for template: {filtered_data['vitals']}")
+        logger.info(f"medications data for template: {filtered_data['medications']}")
+
         latex_template = r'''
 \documentclass[10pt,a4paper]{article}
 \usepackage[utf8]{inputenc}
@@ -762,105 +824,80 @@ async def generate_treatment_plan(request: TreatmentPlanRequest):
 \begin{document}
 
 \begin{center}
-\Large\textbf{TREATMENT PLAN} \\\\[6pt]
-\small\textbf{Reference \#:} \texttt{\textbf{REF12345}}
+\Large\textbf{TREATMENT PLAN} \\[6pt]
+\small\textbf{Reference \:} \texttt{[[ reference_number ]]}
 \end{center}
-\vspace{12pt}
 
 \noindent
-\makebox[\textwidth]{%
-\begin{tabular}{|>{\columncolor{lightgray}}L{0.22\textwidth}|L{0.28\textwidth}|>{\columncolor{lightgray}}L{0.22\textwidth}|L{0.28\textwidth}|}
+\makebox[\textwidth]{
+\begin{tabular}{|>{\columncolor{lightgray}}L{0.18\textwidth}|L{0.22\textwidth}|>{\columncolor{lightgray}}L{0.18\textwidth}|L{0.22\textwidth}|>{\columncolor{lightgray}}L{0.18\textwidth}|L{0.22\textwidth}|}
 \hline
-\textbf{Patient Name} & {{\ }} & \textbf{Date} & {{\ }} \\\\ 
+\textbf{Patient Name} & [[ patient.name ]] & \textbf{Patient ID} & [[ patient.id ]] \\
 \hline
-\textbf{MRN} & {{\ }} & \textbf{Doctor Name} & {{\ }} \\\\ 
+\textbf{DOB} & [[ patient.dob ]] & \textbf{Gender} & [[ patient.gender ]] \\
 \hline
-\textbf{DOB} & {{\ }} & \textbf{Doctor ID} & {{\ }} \\\\ 
+\textbf{Doctor Name} & [[ doctor.name ]] & \textbf{Doctor ID} & [[ doctor.id ]] \\
 \hline
-\textbf{Age} & {{\ }} & \textbf{Signature} & {{\ }} \\\\ 
-\hline
-\textbf{Gender} & {{\ }} & & \\\\ 
+\textbf{Doctor Signature} & [[ doctor.signature ]] & \textbf{Organization ID} & [[ organization_id ]] \\
 \hline
 \end{tabular}
 }
-
-\vspace{24pt}
-
-\section*{Chief Complaint / Presenting Problem}
-\vspace{6pt}
-\begin{tcolorbox}
-\vspace{2em}
-\end{tcolorbox}
 
 \vspace{24pt}
 
 \section*{Problem List}
 \begin{enumerate}[label=\arabic*.]
-  \item \underline{\hspace{0.93\textwidth}}
-  \item \underline{\hspace{0.93\textwidth}}
-  \item \underline{\hspace{0.93\textwidth}}
-  \item \underline{\hspace{0.93\textwidth}}
+[% for p in problems %]
+  \item [[ p.description ]]
+[% endfor %]
 \end{enumerate}
 
 \vspace{24pt}
 
 \section*{Allergies}
-\makebox[\textwidth]{%
+\makebox[\textwidth]{
 \begin{tabular}{|>{\columncolor{lightgray}}L{0.33\textwidth}|>{\columncolor{lightgray}}L{0.33\textwidth}|>{\columncolor{lightgray}}L{0.33\textwidth}|}
 \hline
-\textbf{Allergy Name} & \textbf{Allergy Type} & \textbf{Severity Level} \\\\ 
+\textbf{Allergy Name} & \textbf{Allergy Type} & \textbf{Severity Level} \\
 \hline
-\end{tabular}
-}
-\makebox[\textwidth]{%
-\begin{tabular}{|L{0.33\textwidth}|L{0.33\textwidth}|L{0.33\textwidth}|}
+[% for a in allergies %]
+[[ a.name ]] & [[ a.type ]] & [[ a.severity ]] \\
 \hline
-{{\ }} & {{\ }} & {{\ }} \\\\ 
-\hline
-{{\ }} & {{\ }} & {{\ }} \\\\ 
-\hline
-{{\ }} & {{\ }} & {{\ }} \\\\ 
-\hline
+[% endfor %]
 \end{tabular}
 }
 
 \vspace{24pt}
 
 \section*{Vitals}
-\makebox[\textwidth]{%
+\makebox[\textwidth]{
 \begin{tabular}{|>{\columncolor{lightgray}}L{0.19\textwidth}|>{\columncolor{lightgray}}L{0.19\textwidth}|>{\columncolor{lightgray}}L{0.19\textwidth}|>{\columncolor{lightgray}}L{0.19\textwidth}|>{\columncolor{lightgray}}L{0.19\textwidth}|}
 \hline
-\textbf{Height} & \textbf{Weight} & \textbf{BMI} & \textbf{Heart Rate} & \textbf{Blood Pressure} \\\\ 
+\textbf{Height} & \textbf{Weight} & \textbf{BMI} & \textbf{Heart Rate} & \textbf{Blood Pressure} \\
 \hline
-\end{tabular}
-}
-\makebox[\textwidth]{%
-\begin{tabular}{|L{0.19\textwidth}|L{0.19\textwidth}|L{0.19\textwidth}|L{0.19\textwidth}|L{0.19\textwidth}|}
+[% for v in vitals %]
+[[ v.height ]] & [[ v.weight ]] & [[ v.bmi ]] & [[ v.heart_rate ]] & [[ v.blood_pressure ]] \\
 \hline
-{{\ }} & {{\ }} & {{\ }} & {{\ }} & {{\ }} \\\\ 
-\hline
+[% endfor %]
 \end{tabular}
 }
 \vspace{4pt}
-{\footnotesize \textit{Vitals recorded on: \underline{\hspace{5cm}}}}
+[% if vitals %]
+{\footnotesize \textit{Vitals recorded on: [[ vitals[0].date ]] }}
+[% endif %]
 
 \vspace{24pt}
 
 \section*{Active Medications}
-\makebox[\textwidth]{%
+\makebox[\textwidth]{
 \begin{tabular}{|>{\columncolor{lightgray}}L{0.2\textwidth}|>{\columncolor{lightgray}}L{0.12\textwidth}|>{\columncolor{lightgray}}L{0.2\textwidth}|>{\columncolor{lightgray}}L{0.2\textwidth}|>{\columncolor{lightgray}}L{0.28\textwidth}|}
 \hline
-\textbf{Medication Name} & \textbf{Qty} & \textbf{Dosage Timings} & \textbf{Reason} & \textbf{Description} \\\\ 
+\textbf{Medication Name} & \textbf{Qty} & \textbf{Dosage} & \textbf{Reason} & \textbf{Instruction} \\
 \hline
-\end{tabular}
-}
-\makebox[\textwidth]{%
-\begin{tabular}{|L{0.2\textwidth}|L{0.12\textwidth}|L{0.2\textwidth}|L{0.2\textwidth}|L{0.28\textwidth}|}
+[% for m in medications %]
+[[ m.name ]] & [[ m.qty ]] & [[ m.dosage ]] & [[ m.reason ]] & [[ m.instruction ]] \\
 \hline
-{{\ }} & {{\ }} & {{\ }} & {{\ }} & {{\ }} \\\\ 
-\hline
-{{\ }} & {{\ }} & {{\ }} & {{\ }} & {{\ }} \\\\ 
-\hline
+[% endfor %]
 \end{tabular}
 }
 
@@ -868,68 +905,96 @@ async def generate_treatment_plan(request: TreatmentPlanRequest):
 
 \section*{Assessment Plan}
 \begin{itemize}
-  \item {{\ }}
-  \item {{\ }}
-  \item {{\ }}
-  \item {{\ }}
+[% for step in assessment_steps %]
+  \item [[ step.step_description ]][% if step.timeline %] --- [[ step.timeline ]][% endif %]
+[% endfor %]
 \end{itemize}
 
 \end{document}
 '''
-        prompt2 = (
-            "You are a LaTeX assistant. Replace all {{ ... }} placeholders in the LaTeX template below using the JSON values provided. "
-            "Return ONLY the filled LaTeX code - no markdown formatting, no explanations, no code blocks. "
-            "For bullet lists like Assessment Plan, use \\item Description — Timeline: ..., \n\n"
-            f"LATEX TEMPLATE:\n{latex_template}\n\nVALUES JSON:\n{json.dumps(extracted_values)}"
-        )
-        filled_latex, _ = await llm.qa(prompt2, [])
 
-        # Step 5: Generate assessment plan
+        # Use a safe environment to avoid conflicts with LaTeX
+        env = Environment(
+            block_start_string='[%',
+            block_end_string='%]',
+            variable_start_string='[[',
+            variable_end_string=']]',
+            # ADD THESE TWO LINES TO DEFINE JINJA2 COMMENT DELIMITERS
+            comment_start_string='<#',  # Unlikely to appear in LaTeX
+            comment_end_string='#>',    # Unlikely to appear in LaTeX
+            trim_blocks=True,
+            lstrip_blocks=True
+        )
+        template = env.from_string(latex_template)
+
+
+        # Call LLM only for assessment steps
+        patient_name = filtered_data['patient']['name']
+        problems_list = [p.get('description') for p in filtered_data['problems']]
+        allergies_list = [a.get('name') for a in filtered_data['allergies']]
+        medications_list = [m.get('name') for m in filtered_data['medications']]
+        summary = f"Patient: {patient_name}, Problems: {problems_list}, Allergies: {allergies_list}, Medications: {medications_list}"
         assessment_prompt = (
-            "You are a medical AI assistant. Based on this patient data, return ONLY a JSON array of 7 to 10 assessment steps. "
-            "Each step must have 'step_description', 'timeline'"
-            "Return only the JSON array - no explanations, no markdown formatting, no code blocks.\n\n"
-            f"{json.dumps(patient_data_serializable)}"
+            "Given the following patient summary, generate an assessment plan as a JSON array (7-10 steps, each with 'step_description' and 'timeline'). "
+            "No explanations, no markdown, just valid JSON. If the patient's data is insufficient, you may share no assesment steps\n\n"
+            f"PATIENT SUMMARY: {summary}"
         )
-        assessment_response, _ = await llm.qa(assessment_prompt, [])
-        import re
-        match = re.search(r'\[.*\]', assessment_response, re.DOTALL)
-        assessment_steps = json.loads(match.group()) if match else []
+        t2 = time.time()
+        llm_response = await simple_openai_chat(assessment_prompt)
+        t3 = time.time()
+        logger.info(f"LLM call took {t3-t2:.2f}s")
+        logger.info(f"LLM response size: {len(llm_response)} chars")
 
-        # Step 6: Insert assessment items into LaTeX
-        bullet_items = ""
-        for step in assessment_steps:
-            desc = step.get("step_description", "").strip()
-            timeline = step.get("timeline", "").strip()
-            quantity = step.get("quantity", "")
-            quantity = str(quantity).strip() if quantity else ""
-            if quantity and "medication" in desc.lower():
-                full = f"{desc} — Timeline: {timeline}, Quantity: {quantity}"
+        t4 = time.time()
+        try:
+            json_match = re.search(r'\[.*\]', llm_response, re.DOTALL)
+            if json_match:
+                assessment_steps = json.loads(json_match.group())
             else:
-                full = f"{desc} — Timeline: {timeline}"
-            bullet_items += f"  \\item {full}\n"
+                raise HTTPException(status_code=500, detail="LLM did not return valid JSON array.")
+        except Exception as e:
+            logger.error(f"Failed to parse LLM JSON response: {e}")
+            raise HTTPException(status_code=500, detail=f"Failed to parse LLM JSON response: {e}")
+        t5 = time.time()
+        logger.info(f"LLM response parsing took {t5-t4:.2f}s")
 
-        # Replace itemize block with actual bullet points
-        filled_latex = re.sub(
-            r"\\begin{itemize}.*?\\end{itemize}",
-            lambda m: f"\\begin{{itemize}}\n{bullet_items}\\end{{itemize}}",
-            filled_latex,
-            flags=re.DOTALL
+        # Before rendering, replace underscores with spaces in all template data
+        patient = replace_underscores(filtered_data["patient"])
+        doctor = replace_underscores(filtered_data["doctor"])
+        problems = replace_underscores(filtered_data["problems"])
+        allergies = replace_underscores(filtered_data["allergies"])
+        vitals = replace_underscores(filtered_data["vitals"])
+        medications = replace_underscores(filtered_data["medications"])
+        org_id_render = replace_underscores(organization_id) if organization_id else None
+        ref_num_render = replace_underscores(reference_number) if reference_number else None
+
+        # Render LaTeX with all data
+        filled_latex = template.render(
+            patient=patient,
+            doctor=doctor,
+            problems=problems,
+            allergies=allergies,
+            vitals=vitals,
+            medications=medications,
+            assessment_steps=assessment_steps,
+            organization_id=org_id_render,
+            reference_number=ref_num_render
         )
-        filled_latex = re.sub(r'^```latex\n|```$', '', filled_latex.strip(), flags=re.MULTILINE)
 
-        # Step 7: Convert LaTeX to PDF and return
+        # Step 6: Convert LaTeX to PDF and return
+        t6 = time.time()
         try:
             pdf_bytes = latex_to_pdf(filled_latex)
+            t7 = time.time()
+            logger.info(f"PDF generation took {t7-t6:.2f}s")
             return Response(
                 content=pdf_bytes,
                 media_type="application/pdf",
                 headers={"Content-Disposition": "attachment; filename=treatment_plan.pdf"}
             )
         except HTTPException:
-            # If PDF generation fails, fall back to returning LaTeX file
             logger.warning("PDF generation failed, falling back to LaTeX file")
-            with tempfile.NamedTemporaryFile(delete=False, mode="w", suffix=".tex") as tmp_file:
+            with tempfile.NamedTemporaryFile(delete=False, mode="w", suffix=".tex") as  tmp_file:
                 tmp_file.write(filled_latex)
                 tex_path = tmp_file.name
             return FileResponse(tex_path, filename="treatment_plan.tex", media_type="application/x-tex")
@@ -952,6 +1017,16 @@ def init_mysql_connection():
             database=os.environ.get("MYSQL_DATABASE"),
         )
         logger.info("MySQL connection established at startup.")
+
+def replace_underscores(obj):
+    if isinstance(obj, dict):
+        return {k: replace_underscores(v) for k, v in obj.items()}
+    elif isinstance(obj, list):
+        return [replace_underscores(i) for i in obj]
+    elif isinstance(obj, str):
+        return obj.replace('_', ' ')
+    else:
+        return obj
 
 def latex_to_pdf(latex_content: str) -> bytes:
     """

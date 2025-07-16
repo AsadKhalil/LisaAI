@@ -5,6 +5,7 @@ import os
 import time
 import traceback
 from langchain_openai import ChatOpenAI
+from langchain_core.messages import HumanMessage
 import yaml
 from langchain.agents import tool, AgentExecutor
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
@@ -354,3 +355,18 @@ You can use the following glossary to interpret the user's question:
         total_response_time = time.time() - total_start_time
         self.logger.info(f"total response time: {total_response_time}")
         return response, context
+
+
+# Simple direct OpenAI chat function (no RAG, no tools)
+async def simple_openai_chat(prompt: str) -> str:
+    """
+    Sends a prompt to the OpenAI LLM and returns the response. No RAG, no tools, just a direct chat completion.
+    """
+    model = os.environ.get("OPENAI_MODEL")
+    api_key = os.environ.get("OPENAI_API_KEY")
+    if not api_key:
+        raise RuntimeError("OPENAI_API_KEY environment variable not set.")
+    llm = ChatOpenAI(model=model, openai_api_key=api_key, temperature=0.3)
+    # LangChain's ChatOpenAI expects a list of messages
+    response = await llm.ainvoke([HumanMessage(content=prompt)])
+    return response.content
