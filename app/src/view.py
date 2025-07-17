@@ -9,9 +9,20 @@ from typing_extensions import Annotated
 from fastapi import Depends, Response, UploadFile, HTTPException, APIRouter, File, Form
 from fastapi.responses import HTMLResponse
 from fastapi.security import OAuth2PasswordBearer
+
 # from firebase_admin.auth import UserRecord
 from app.src.rating import add_rating_data
-from app.src.data_types import ChangeRole, Conversation, Rating, Query, UpdateUser, Prompt, DeleteFile, ActiveFile, TreatmentPlanRequest
+from app.src.data_types import (
+    ChangeRole,
+    Conversation,
+    Rating,
+    Query,
+    UpdateUser,
+    Prompt,
+    DeleteFile,
+    ActiveFile,
+    TreatmentPlanRequest,
+)
 from .modules.databases import ConversationDB
 from .modules.services import LLMAgentFactory, simple_openai_chat
 from .modules.auth import Authentication
@@ -42,9 +53,7 @@ load_dotenv()
 
 router = APIRouter()
 
-origins = [
-    "*"
-]
+origins = ["*"]
 
 # Connect To Database
 db = ConversationDB()
@@ -63,9 +72,9 @@ async def get_current_user(token: Annotated[str, Depends(oauth2scheme)]):
 
         if user.custom_claims is not None:
             logger.info(
-                f"Current user's local id: {user.custom_claims.get('local_id')}")
-            logger.info(
-                f"Current user's role: {user.custom_claims.get('role')}")
+                f"Current user's local id: {user.custom_claims.get('local_id')}"
+            )
+            logger.info(f"Current user's role: {user.custom_claims.get('role')}")
         else:
             logger.info("Current user's custom claims are None")
         if user.email_verified is False:
@@ -75,7 +84,8 @@ async def get_current_user(token: Annotated[str, Depends(oauth2scheme)]):
     except Exception:
         traceback.print_exc()
         raise HTTPException(
-            status_code=401, detail="Invalid authentication credentials")
+            status_code=401, detail="Invalid authentication credentials"
+        )
 
 
 @router.get("/")
@@ -106,8 +116,7 @@ async def get_chatbot_response(query: Query):
         conversation_id = None
 
         if not query.convo_id:  # Check if 'chat_history' is not present or empty
-            conversation_id = await db.insert_conversation(
-                user_id, query.input)
+            conversation_id = await db.insert_conversation(user_id, query.input)
             logger.info(f"new Conversation ID: {conversation_id}")
         else:
             conversation_id = query.convo_id
@@ -118,25 +127,35 @@ async def get_chatbot_response(query: Query):
             conversation_rows = await db.get_conversation(conversation_id)
             chat_history = []
             for row in conversation_rows:
-                chat_history.append({
-                    "prompt": row[2],  # Question column
-                    "response": row[3]  # Answer column
-                })
+                chat_history.append(
+                    {
+                        "prompt": row[2],  # Question column
+                        "response": row[3],  # Answer column
+                    }
+                )
 
         # chatbot's response
-        response, context = await llm.qa(
-            query.input, chat_history)
+        response, context = await llm.qa(query.input, chat_history)
         end_time = time.time()
         response_time = end_time - start_time
         conversation_id = json.dumps(str(conversation_id))
         conversation_id = conversation_id.strip('"')
         # Store the query and response in the database
-        query_id = await db.insert_query(conversation_id,
-                                         query.input, response, context, response_time, user_id=user_id)
+        query_id = await db.insert_query(
+            conversation_id,
+            query.input,
+            response,
+            context,
+            response_time,
+            user_id=user_id,
+        )
         query_id = json.dumps(str(query_id))
         query_id = query_id.strip('"')
-        response = {"response": response,
-                    "query_id": query_id, "convo_id": conversation_id}
+        response = {
+            "response": response,
+            "query_id": query_id,
+            "convo_id": conversation_id,
+        }
         stringified_response = json.dumps(response)
 
         return stringified_response
@@ -144,6 +163,7 @@ async def get_chatbot_response(query: Query):
         print(traceback.format_exc())
         print(sys.exc_info()[2])
         raise HTTPException(status_code=500, detail=str(e)) from e
+
 
 # @router.get("/check_drug_index")
 # async def check_drug_index():
@@ -158,8 +178,11 @@ async def get_chatbot_response(query: Query):
 #         logger.error(traceback.format_exc())
 #         raise HTTPException(status_code=500, detail=str(e))
 
+
 @router.post("/rating")
-async def add_rating(data: Rating, current_user: Annotated[Any, Depends(get_current_user)]):
+async def add_rating(
+    data: Rating, current_user: Annotated[Any, Depends(get_current_user)]
+):
     """route for adding rating"""
     try:
         response = await add_rating_data(data, db)
@@ -179,13 +202,11 @@ async def get_conversation(data: Conversation):
     except AttributeError:
         logger.exception(traceback.format_exc())
         logger.exception(sys.exc_info()[2])
-        raise HTTPException(
-            status_code=401, detail="Unauthorised")
+        raise HTTPException(status_code=401, detail="Unauthorised")
     except Exception:
         logger.exception(traceback.format_exc())
         logger.exception(sys.exc_info()[2])
-        raise HTTPException(
-            status_code=500, detail="Failed to get conversation")
+        raise HTTPException(status_code=500, detail="Failed to get conversation")
 
 
 @router.post("/change_role")
@@ -193,9 +214,15 @@ async def change_role_admin_endpoint(data: ChangeRole):
     try:
         auth = Authentication()
         user = await auth.get_user_by_email(data.email)
-        if data.role not in [constants.ADMIN_ROLE, constants.DEFAULT_ROLE, constants.EMPLOYEE_ROLE]:
+        if data.role not in [
+            constants.ADMIN_ROLE,
+            constants.DEFAULT_ROLE,
+            constants.EMPLOYEE_ROLE,
+        ]:
             raise HTTPException(
-                status_code=400, detail=f"Role must be either {constants.ADMIN_ROLE} or {constants.DEFAULT_ROLE}")
+                status_code=400,
+                detail=f"Role must be either {constants.ADMIN_ROLE} or {constants.DEFAULT_ROLE}",
+            )
         response1 = await auth.attach_role_to_user(user.uid, data.role)
         response2 = await db.change_user_role(data.role, data.email)
         response = {"firebase": response1, "database": response2}
@@ -206,19 +233,25 @@ async def change_role_admin_endpoint(data: ChangeRole):
         else:
             logger.exception(traceback.format_exc())
             raise HTTPException(
-                status_code=500, detail=error_messages.ROLE_CHANGE_FAILED)
+                status_code=500, detail=error_messages.ROLE_CHANGE_FAILED
+            )
     except Exception:
         logger.exception(traceback.format_exc())
-        raise HTTPException(
-            status_code=500, detail=error_messages.ROLE_CHANGE_FAILED)
+        raise HTTPException(status_code=500, detail=error_messages.ROLE_CHANGE_FAILED)
 
 
 @router.post("/fix_custom_claim")
 async def change_role_admin_endpoint(data: ChangeRole):
     try:
-        if data.role not in [constants.ADMIN_ROLE, constants.DEFAULT_ROLE, constants.EMPLOYEE_ROLE]:
+        if data.role not in [
+            constants.ADMIN_ROLE,
+            constants.DEFAULT_ROLE,
+            constants.EMPLOYEE_ROLE,
+        ]:
             raise HTTPException(
-                status_code=400, detail=f"Role must be either {constants.ADMIN_ROLE} or {constants.DEFAULT_ROLE}")
+                status_code=400,
+                detail=f"Role must be either {constants.ADMIN_ROLE} or {constants.DEFAULT_ROLE}",
+            )
         auth = Authentication()
         user = await auth.get_user_by_email(data.email)
         user_from_db = await db.get_user_by_email(data.email)
@@ -227,13 +260,13 @@ async def change_role_admin_endpoint(data: ChangeRole):
             custom_claims = {}
             logger.critical("the user's Custom claims are None")
 
-        if custom_claims.get('role') is None:
-            custom_claims['role'] = data.role
+        if custom_claims.get("role") is None:
+            custom_claims["role"] = data.role
             logger.critical("the user's role is None")
 
-        if custom_claims.get('local_id') is None:
+        if custom_claims.get("local_id") is None:
             print(user_from_db[0])
-            custom_claims['local_id'] = str(user_from_db[0][0])
+            custom_claims["local_id"] = str(user_from_db[0][0])
             logger.critical("the user's local_id was None")
 
         print(custom_claims)
@@ -248,19 +281,21 @@ async def change_role_admin_endpoint(data: ChangeRole):
         else:
             logger.exception(traceback.format_exc())
             raise HTTPException(
-                status_code=500, detail=error_messages.ROLE_CHANGE_FAILED)
+                status_code=500, detail=error_messages.ROLE_CHANGE_FAILED
+            )
     except Exception:
         logger.exception(traceback.format_exc())
-        raise HTTPException(
-            status_code=500, detail=error_messages.ROLE_CHANGE_FAILED)
+        raise HTTPException(status_code=500, detail=error_messages.ROLE_CHANGE_FAILED)
 
 
 @router.get("/get_user_conversations")
-async def get_user_conversations(current_user: Annotated[Any, Depends(get_current_user)]):
+async def get_user_conversations(
+    current_user: Annotated[Any, Depends(get_current_user)],
+):
     try:
         user_id = current_user.uid
-        if current_user.custom_claims.get('local_id') is not None:
-            user_id = current_user.custom_claims.get('local_id')
+        if current_user.custom_claims.get("local_id") is not None:
+            user_id = current_user.custom_claims.get("local_id")
         rows = await db.get_conversation_ids(user_id)
 
         response = []
@@ -270,13 +305,14 @@ async def get_user_conversations(current_user: Annotated[Any, Depends(get_curren
         return response
     except Exception:
         logger.exception(traceback.format_exc())
-        raise HTTPException(
-            status_code=500, detail="Failed to get user conversations")
+        raise HTTPException(status_code=500, detail="Failed to get user conversations")
 
 
 @router.get("/analysis_ask_engr")
-async def get_analysis_ask_engr(current_user: Annotated[Any, Depends(get_current_user)]):
-    if current_user.custom_claims.get('role') != 'Admin':
+async def get_analysis_ask_engr(
+    current_user: Annotated[Any, Depends(get_current_user)],
+):
+    if current_user.custom_claims.get("role") != "Admin":
         raise HTTPException(status_code=401, detail="Unauthorised")
     else:
         try:
@@ -290,7 +326,7 @@ async def get_analysis_ask_engr(current_user: Annotated[Any, Depends(get_current
 
 @router.get("/analysis_ask_hr")
 async def get_analysis_ask_hr(current_user: Annotated[Any, Depends(get_current_user)]):
-    if current_user.custom_claims.get('role') != 'Admin':
+    if current_user.custom_claims.get("role") != "Admin":
         raise HTTPException(status_code=401, detail="Unauthorised")
     else:
         try:
@@ -303,8 +339,10 @@ async def get_analysis_ask_hr(current_user: Annotated[Any, Depends(get_current_u
 
 
 @router.get("/analysis_ask_engr_response_time")
-async def get_analysis_ask_engr_response_time(current_user: Annotated[Any, Depends(get_current_user)]):
-    if current_user.custom_claims.get('role') != 'Admin':
+async def get_analysis_ask_engr_response_time(
+    current_user: Annotated[Any, Depends(get_current_user)],
+):
+    if current_user.custom_claims.get("role") != "Admin":
         raise HTTPException(status_code=401, detail="Unauthorised")
     else:
         try:
@@ -317,8 +355,10 @@ async def get_analysis_ask_engr_response_time(current_user: Annotated[Any, Depen
 
 
 @router.get("/analysis_ask_hr_response_time")
-async def get_analysis_ask_hr_response_time(current_user: Annotated[Any, Depends(get_current_user)]):
-    if current_user.custom_claims.get('role') != 'Admin':
+async def get_analysis_ask_hr_response_time(
+    current_user: Annotated[Any, Depends(get_current_user)],
+):
+    if current_user.custom_claims.get("role") != "Admin":
         raise HTTPException(status_code=401, detail="Unauthorised")
     else:
         try:
@@ -331,8 +371,10 @@ async def get_analysis_ask_hr_response_time(current_user: Annotated[Any, Depends
 
 
 @router.get("/analysis_ask_engr_daily_usage")
-async def get_analysis_ask_engr_daily_usage(current_user: Annotated[Any, Depends(get_current_user)]):
-    if current_user.custom_claims.get('role') != 'Admin':
+async def get_analysis_ask_engr_daily_usage(
+    current_user: Annotated[Any, Depends(get_current_user)],
+):
+    if current_user.custom_claims.get("role") != "Admin":
         raise HTTPException(status_code=401, detail="Unauthorised")
     else:
         try:
@@ -345,8 +387,10 @@ async def get_analysis_ask_engr_daily_usage(current_user: Annotated[Any, Depends
 
 
 @router.get("/analysis_ask_hr_daily_usage")
-async def get_analysis_ask_hr_daily_usage(current_user: Annotated[Any, Depends(get_current_user)]):
-    if current_user.custom_claims.get('role') != 'Admin':
+async def get_analysis_ask_hr_daily_usage(
+    current_user: Annotated[Any, Depends(get_current_user)],
+):
+    if current_user.custom_claims.get("role") != "Admin":
         raise HTTPException(status_code=401, detail="Unauthorised")
     else:
         try:
@@ -359,9 +403,11 @@ async def get_analysis_ask_hr_daily_usage(current_user: Annotated[Any, Depends(g
 
 
 @router.post("/get_user_management_data")
-async def get_user_management_data(current_user: Annotated[Any, Depends(get_current_user)]):
+async def get_user_management_data(
+    current_user: Annotated[Any, Depends(get_current_user)],
+):
     try:
-        if current_user.custom_claims.get('role') != 'Admin':
+        if current_user.custom_claims.get("role") != "Admin":
             raise HTTPException(status_code=401, detail="Unauthorised")
         else:
             response = await db.get_users()
@@ -373,7 +419,9 @@ async def get_user_management_data(current_user: Annotated[Any, Depends(get_curr
 
 
 @router.patch("/update_user")
-async def get_user_manager_data(current_user: Annotated[Any, Depends(get_current_user)], data: UpdateUser):
+async def get_user_manager_data(
+    current_user: Annotated[Any, Depends(get_current_user)], data: UpdateUser
+):
     try:
         email = current_user.email
         if email is None:
@@ -388,20 +436,29 @@ async def get_user_manager_data(current_user: Annotated[Any, Depends(get_current
 
 
 @router.patch("/change_user_role")
-async def change_user_role_admin(current_user: Annotated[Any, Depends(get_current_user)], data: ChangeRole):
+async def change_user_role_admin(
+    current_user: Annotated[Any, Depends(get_current_user)], data: ChangeRole
+):
     try:
         if not current_user.custom_claims:
             raise HTTPException(
-                status_code=400, detail="The Custom claim of user is none")
-        role = current_user.custom_claims.get('role')
+                status_code=400, detail="The Custom claim of user is none"
+            )
+        role = current_user.custom_claims.get("role")
         if role != constants.ADMIN_ROLE:
             raise HTTPException(status_code=401, detail="Unauthorised")
 
         auth = Authentication()
         user = await auth.get_user_by_email(data.email)
-        if data.role not in [constants.ADMIN_ROLE, constants.DEFAULT_ROLE, constants.EMPLOYEE_ROLE]:
+        if data.role not in [
+            constants.ADMIN_ROLE,
+            constants.DEFAULT_ROLE,
+            constants.EMPLOYEE_ROLE,
+        ]:
             raise HTTPException(
-                status_code=400, detail=f"Role must be either {constants.ADMIN_ROLE}, {constants.EMPLOYEE_ROLE} or {constants.DEFAULT_ROLE}")
+                status_code=400,
+                detail=f"Role must be either {constants.ADMIN_ROLE}, {constants.EMPLOYEE_ROLE} or {constants.DEFAULT_ROLE}",
+            )
         response1 = await auth.attach_role_to_user(user.uid, data.role)
 
         response = await db.change_user_role(data.role, data.email)
@@ -455,8 +512,8 @@ async def list_files():
     except AttributeError:
         logger.exception(traceback.format_exc())
         logger.exception(sys.exc_info()[2])
-        raise HTTPException(
-            status_code=401, detail="Unexpected Error")
+        raise HTTPException(status_code=401, detail="Unexpected Error")
+
 
 # @router.get("/list-drug-index-files")
 # async def list_drug_index_files():
@@ -467,14 +524,14 @@ async def list_files():
 #     try:
 #         # Get file names from the drug-index collection
 #         file_names = await db.get_file_names_by_collection("drug-index")
-        
+
 #         if not file_names:
 #             return {"message": "No files found in drug-index collection.", "files": []}
 
 #         # Get file details from the database
 #         all_files = await db.get_files()
 #         drug_index_files = []
-        
+
 #         # Filter and combine information
 #         for file_name in file_names:
 #             file_info = next((f for f in all_files if f[0] == file_name), None)
@@ -497,17 +554,21 @@ async def list_files():
 #         logger.error(traceback.format_exc())
 #         raise HTTPException(status_code=500, detail=str(e))
 
-@router.post('/delete-file')
+
+@router.post("/delete-file")
 async def delete_file(input: DeleteFile):
     try:
         aws = AWS()
         aws.delete_file(input.file_name)
         _ = await db.delete_file(input.file_name)
         _ = await db.delete_file_embeddings(input.file_name)
-        return {"message": "File Delete Successfully", }
+        return {
+            "message": "File Delete Successfully",
+        }
     except Exception as e:
         print(traceback.format_exc())
         raise HTTPException(status_code=500, detail=str(e))
+
 
 # @router.post("/clean-drug-index")
 # async def clean_drug_index():
@@ -518,7 +579,7 @@ async def delete_file(input: DeleteFile):
 #     try:
 #         # Step 1: Get all file names linked to the 'drug-index'
 #         file_names = await db.get_file_names_by_collection("drug-index")
-        
+
 #         if not file_names:
 #             return {"message": "No files found in drug-index collection."}
 
@@ -545,7 +606,7 @@ async def delete_file(input: DeleteFile):
 #             "message": f"Cleanup completed. {len(results['successful'])} files deleted successfully.",
 #             "details": results
 #         }
-    
+
 #     except Exception as e:
 #         logger.error(f"Error in clean-drug-index: {str(e)}")
 #         logger.error(traceback.format_exc())
@@ -553,12 +614,16 @@ async def delete_file(input: DeleteFile):
 
 
 @router.post("/file-active-toggle")
-async def file_active_toggle(input: ActiveFile, current_user: Annotated[Any, Depends(get_current_user)]):
+async def file_active_toggle(
+    input: ActiveFile, current_user: Annotated[Any, Depends(get_current_user)]
+):
     """route for adding rating"""
     try:
 
         _ = await db.toggle_file_active(input.file_name, input.active)
-        return {"message": "File Changed Successfully", }
+        return {
+            "message": "File Changed Successfully",
+        }
     except Exception as e:
         print(traceback.format_exc())
         print(sys.exc_info()[2])
@@ -590,7 +655,7 @@ async def add_prompt(prompt: Prompt):
 
 @router.get("/prompts")
 async def get_prompt(current_user: Annotated[Any, Depends(get_current_user)]):
-    if current_user.custom_claims.get('role') != 'Admin':
+    if current_user.custom_claims.get("role") != "Admin":
         raise HTTPException(status_code=401, detail="Unauthorised")
     else:
         try:
@@ -601,7 +666,7 @@ async def get_prompt(current_user: Annotated[Any, Depends(get_current_user)]):
                 "glossary": response[2],
                 "tone": response[3],
                 "response_length": response[4],
-                "content": response[5]
+                "content": response[5],
             }
         except Exception as e:
             print(traceback.format_exc())
@@ -629,6 +694,7 @@ async def get_prompt(current_user: Annotated[Any, Depends(get_current_user)]):
 
 class DrugQuery(BaseModel):
     query: str
+
 
 # @router.post("/query_drug")
 # async def query_drug_endpoint(query: DrugQuery):
@@ -677,6 +743,7 @@ class DrugQuery(BaseModel):
 #         logger.error(traceback.format_exc())
 #         raise HTTPException(status_code=500, detail="Internal server error")
 
+
 def convert_datetimes(obj):
     """Convert datetime objects to strings for JSON serialization"""
     if isinstance(obj, dict):
@@ -691,7 +758,17 @@ def convert_datetimes(obj):
         return obj
 
 
-def filter_patient_data(patient, allergies, problems, medications, vitals, laboratory, family_history, doctor_name=None, doctor_id=None):
+def filter_patient_data(
+    patient,
+    allergies,
+    problems,
+    medications,
+    vitals,
+    laboratory,
+    family_history,
+    doctor_name=None,
+    doctor_id=None,
+):
     # Ensure both 'firstName' and 'name' are supported for patient name
     patient_name = patient.get("firstName")
     filtered = {
@@ -699,46 +776,102 @@ def filter_patient_data(patient, allergies, problems, medications, vitals, labor
             "name": patient_name,
             "id": patient.get("id"),
             "dob": "",
-            "gender": "Male" if patient.get("sexAtBirthCode") == "gender_at_birth_male" else "Female" if patient.get("sexAtBirthCode") == "gender_at_birth_female" else "other",
+            "gender": (
+                "Male"
+                if patient.get("sexAtBirthCode") == "gender_at_birth_male"
+                else (
+                    "Female"
+                    if patient.get("sexAtBirthCode") == "gender_at_birth_female"
+                    else "other"
+                )
+            ),
         },
-        "doctor": {
-            "name": doctor_name,
-            "id": doctor_id,
-            "signature": ""
-        },
-        "problems": [
-            {"description": p.get("problemorissue")} for p in problems
-        ] if problems else [{"description": None}],
-        "allergies": [
-            {
-                "name": a.get("allergy"),
-                "type": a.get("allergytype"),
-                "severity": a.get("severitiesCode")
-            }
-            for a in allergies
-        ] if allergies else [{"name": None, "type": None, "severity": None}],
-        "vitals": [
-            {
-                "height": v.get("heightFt") + 'ft' + v.get("heightIn") + 'in' if v.get("heightFt") and v.get("heightIn") else None,
-                "weight": v.get("weightKilo") + '.' + v.get("weightGram") + v.get("weightUnit") if v.get("weightKilo") and v.get("weightGram") and v.get("weightUnit") else None,
-                "bmi": v.get("bmi"),
-                "heart_rate": v.get("pulseBpm"),
-                "blood_pressure": v.get("systolicBloodPressure") + '/' + v.get("diastolicBloodPressure") if v.get("systolicBloodPressure") and v.get("diastolicBloodPressure") else None,
-                "date": v.get("recordDate")
-            }
-            for v in vitals
-        ] if vitals else [{"height": None, "weight": None, "bmi": None, "heart_rate": None, "blood_pressure": None, "date": None}],
-        "medications": [
-            {
-                "name": m.get("drugname"),
-                "qty": m.get("quantity"),
-                "dosage": m.get("dose"),
-                "reason": m.get("reason"),
-                "instruction": m.get("instruction")
-            }
-            for m in medications
-        ] if medications else [{"name": None, "qty": None, "dosage": None, "reason": None, "instruction": None}]
+        "doctor": {"name": doctor_name, "id": doctor_id, "signature": ""},
+        "problems": (
+            [{"description": p.get("problemorissue")} for p in problems]
+            if problems
+            else [{"description": None}]
+        ),
+        "allergies": (
+            [
+                {
+                    "name": a.get("allergy"),
+                    "type": a.get("allergytype"),
+                    "severity": a.get("severitiesCode"),
+                }
+                for a in allergies
+            ]
+            if allergies
+            else [{"name": None, "type": None, "severity": None}]
+        ),
+        "vitals": (
+            [
+                {
+                    "height": (
+                        v.get("heightFt") + "ft" + v.get("heightIn") + "in"
+                        if v.get("heightFt") and v.get("heightIn")
+                        else None
+                    ),
+                    "weight": (
+                        v.get("weightKilo")
+                        + "."
+                        + v.get("weightGram")
+                        + v.get("weightUnit")
+                        if v.get("weightKilo")
+                        and v.get("weightGram")
+                        and v.get("weightUnit")
+                        else None
+                    ),
+                    "bmi": v.get("bmi"),
+                    "heart_rate": v.get("pulseBpm"),
+                    "blood_pressure": (
+                        v.get("systolicBloodPressure")
+                        + "/"
+                        + v.get("diastolicBloodPressure")
+                        if v.get("systolicBloodPressure")
+                        and v.get("diastolicBloodPressure")
+                        else None
+                    ),
+                    "date": v.get("recordDate"),
+                }
+                for v in vitals
+            ]
+            if vitals
+            else [
+                {
+                    "height": None,
+                    "weight": None,
+                    "bmi": None,
+                    "heart_rate": None,
+                    "blood_pressure": None,
+                    "date": None,
+                }
+            ]
+        ),
+        "medications": (
+            [
+                {
+                    "name": m.get("drugname"),
+                    "qty": m.get("quantity"),
+                    "dosage": m.get("dose"),
+                    "reason": m.get("reason"),
+                    "instruction": m.get("instruction"),
+                }
+                for m in medications
+            ]
+            if medications
+            else [
+                {
+                    "name": None,
+                    "qty": None,
+                    "dosage": None,
+                    "reason": None,
+                    "instruction": None,
+                }
+            ]
+        ),
     }
+
     def clean(obj):
         if isinstance(obj, dict):
             return {k: clean(v) for k, v in obj.items() if v not in [None, "", [], {}]}
@@ -746,6 +879,7 @@ def filter_patient_data(patient, allergies, problems, medications, vitals, labor
             return [clean(i) for i in obj if i not in [None, "", [], {}]]
         else:
             return obj
+
     return clean(filtered)
 
 
@@ -774,7 +908,9 @@ async def generate_treatment_plan(request: TreatmentPlanRequest):
         cursor.execute("SELECT * FROM problem WHERE patient_id = %s", (patient_id,))
         problems = cursor.fetchall()
 
-        cursor.execute("SELECT * FROM patient_medications WHERE patient_id = %s", (patient_id,))
+        cursor.execute(
+            "SELECT * FROM patient_medications WHERE patient_id = %s", (patient_id,)
+        )
         medications = cursor.fetchall()
 
         cursor.execute("SELECT * FROM vitals WHERE patientId = %s", (patient_id,))
@@ -783,7 +919,9 @@ async def generate_treatment_plan(request: TreatmentPlanRequest):
         cursor.execute("SELECT * FROM laboratory WHERE patientId = %s", (patient_id,))
         laboratory = cursor.fetchall()
 
-        cursor.execute("SELECT * FROM family_history WHERE patientId = %s", (patient_id,))
+        cursor.execute(
+            "SELECT * FROM family_history WHERE patientId = %s", (patient_id,)
+        )
         family_history = cursor.fetchall()
 
         cursor.close()
@@ -792,8 +930,20 @@ async def generate_treatment_plan(request: TreatmentPlanRequest):
         logger.info(f"MySQL fetch took {t1-t0:.2f}s")
 
         # Prepare filtered data for template
-        filtered_data = filter_patient_data(patient, allergies, problems, medications, vitals, laboratory, family_history, doctor_name=doctor_name, doctor_id=doctor_id)
-        patient_data_serializable = convert_datetimes(filtered_data) # This line now has purpose with datetime conversion placeholder
+        filtered_data = filter_patient_data(
+            patient,
+            allergies,
+            problems,
+            medications,
+            vitals,
+            laboratory,
+            family_history,
+            doctor_name=doctor_name,
+            doctor_id=doctor_id,
+        )
+        patient_data_serializable = convert_datetimes(
+            filtered_data
+        )  # This line now has purpose with datetime conversion placeholder
 
         # Debug log patient data before rendering
         logger.info(f"Patient data for template: {filtered_data['patient']}")
@@ -803,7 +953,7 @@ async def generate_treatment_plan(request: TreatmentPlanRequest):
         logger.info(f"vitals data for template: {filtered_data['vitals']}")
         logger.info(f"medications data for template: {filtered_data['medications']}")
 
-        latex_template = r'''
+        latex_template = r"""
 \documentclass[10pt,a4paper]{article}
 \usepackage[utf8]{inputenc}
 \usepackage[margin=0.75in]{geometry}
@@ -904,32 +1054,33 @@ async def generate_treatment_plan(request: TreatmentPlanRequest):
 \end{itemize}
 
 \end{document}
-'''
+"""
 
         # Use a safe environment to avoid conflicts with LaTeX
         env = Environment(
-            block_start_string='[%',
-            block_end_string='%]',
-            variable_start_string='[[',
-            variable_end_string=']]',
+            block_start_string="[%",
+            block_end_string="%]",
+            variable_start_string="[[",
+            variable_end_string="]]",
             # ADD THESE TWO LINES TO DEFINE JINJA2 COMMENT DELIMITERS
-            comment_start_string='<#',  # Unlikely to appear in LaTeX
-            comment_end_string='#>',    # Unlikely to appear in LaTeX
+            comment_start_string="<#",  # Unlikely to appear in LaTeX
+            comment_end_string="#>",  # Unlikely to appear in LaTeX
             trim_blocks=True,
-            lstrip_blocks=True
+            lstrip_blocks=True,
         )
         template = env.from_string(latex_template)
-        language = request.language if hasattr(request, 'language') else 'eng'
-
+        language = request.language if hasattr(request, "language") else "eng"
+        logger.info(f"Language for treatment plan: {language}")
         # Call LLM only for assessment steps
-        patient_name = filtered_data['patient']['name']
-        problems_list = [p.get('description') for p in filtered_data['problems']]
-        allergies_list = [a.get('name') for a in filtered_data['allergies']]
-        medications_list = [m.get('name') for m in filtered_data['medications']]
+        patient_name = filtered_data["patient"]["name"]
+        problems_list = [p.get("description") for p in filtered_data["problems"]]
+        allergies_list = [a.get("name") for a in filtered_data["allergies"]]
+        medications_list = [m.get("name") for m in filtered_data["medications"]]
         summary = f"Patient: {patient_name}, Problems: {problems_list}, Allergies: {allergies_list}, Medications: {medications_list}"
         assessment_prompt = (
             "Given the following patient summary, generate an assessment plan as a JSON array (7-10 steps, each with 'step_description' and 'timeline'). "
             "No explanations, no markdown, just valid JSON. if the lamguage is 'esp', then your response should be in spanish. \n\n"
+            " ***DO NOT Hullucinate if the give response in the requested language *** "
             f"PATIENT SUMMARY: {summary}"
             f"LANGUAGE: {language}"
         )
@@ -941,14 +1092,18 @@ async def generate_treatment_plan(request: TreatmentPlanRequest):
 
         t4 = time.time()
         try:
-            json_match = re.search(r'\[.*\]', llm_response, re.DOTALL)
+            json_match = re.search(r"\[.*\]", llm_response, re.DOTALL)
             if json_match:
                 assessment_steps = json.loads(json_match.group())
             else:
-                raise HTTPException(status_code=500, detail="LLM did not return valid JSON array.")
+                raise HTTPException(
+                    status_code=500, detail="LLM did not return valid JSON array."
+                )
         except Exception as e:
             logger.error(f"Failed to parse LLM JSON response: {e}")
-            raise HTTPException(status_code=500, detail=f"Failed to parse LLM JSON response: {e}")
+            raise HTTPException(
+                status_code=500, detail=f"Failed to parse LLM JSON response: {e}"
+            )
         t5 = time.time()
         logger.info(f"LLM response parsing took {t5-t4:.2f}s")
 
@@ -967,12 +1122,17 @@ async def generate_treatment_plan(request: TreatmentPlanRequest):
         allergies = replace_underscores(filtered_data["allergies"])
         vitals = replace_underscores(filtered_data["vitals"])
         medications = replace_underscores(filtered_data["medications"])
-        org_id_render = replace_underscores(organization_id) if organization_id else None
-        ref_num_render = replace_underscores(reference_number) if reference_number else None
+        org_id_render = (
+            replace_underscores(organization_id) if organization_id else None
+        )
+        ref_num_render = (
+            replace_underscores(reference_number) if reference_number else None
+        )
 
         # Async batch translation using LLM
-        async def llm_batch_translate(obj, target_lang='es'):
+        async def llm_batch_translate(obj, target_lang="es"):
             strings = []
+
             def collect_strings(o):
                 if isinstance(o, dict):
                     for v in o.values():
@@ -982,21 +1142,23 @@ async def generate_treatment_plan(request: TreatmentPlanRequest):
                         collect_strings(i)
                 elif isinstance(o, str):
                     strings.append(o)
+
             collect_strings(obj)
             if not strings:
                 return obj
             prompt = (
-                f'Translate the following list of English phrases to {target_lang}. '
-                'Return a JSON array of translations:'
-                f'{json.dumps(strings)}'
+                f"Translate the following list of English phrases to {target_lang}. "
+                "Return a JSON array of translations:"
+                f"{json.dumps(strings)}"
             )
             response = await simple_openai_chat(prompt)
-            match = re.search(r'\[.*\]', response, re.DOTALL)
+            match = re.search(r"\[.*\]", response, re.DOTALL)
             if match:
                 translated = json.loads(match.group())
             else:
-                raise Exception('LLM did not return valid JSON array')
+                raise Exception("LLM did not return valid JSON array")
             it = iter(translated)
+
             def reconstruct(o):
                 if isinstance(o, dict):
                     return {k: reconstruct(v) for k, v in o.items()}
@@ -1006,54 +1168,103 @@ async def generate_treatment_plan(request: TreatmentPlanRequest):
                     return next(it)
                 else:
                     return o
+
             return reconstruct(obj)
 
         # Translate all data to Spanish if requested (batch, LLM)
-        if getattr(request, 'language', None) == 'esp':
+        if getattr(request, "language", None) == "esp":
             t_translate_start = time.time()
-            patient = await llm_batch_translate(patient, 'es')
-            doctor = await llm_batch_translate(doctor, 'es')
-            problems = await llm_batch_translate(problems, 'es')
-            allergies = await llm_batch_translate(allergies, 'es')
-            vitals = await llm_batch_translate(vitals, 'es')
-            medications = await llm_batch_translate(medications, 'es')
+            patient = await llm_batch_translate(patient, "es")
+            doctor = await llm_batch_translate(doctor, "es")
+            problems = await llm_batch_translate(problems, "es")
+            allergies = await llm_batch_translate(allergies, "es")
+            vitals = await llm_batch_translate(vitals, "es")
+            medications = await llm_batch_translate(medications, "es")
             # For org_id_render and ref_num_render, use LLM for consistency
-            org_id_render = (await llm_batch_translate(org_id_render, 'es')) if org_id_render else None
-            ref_num_render = (await llm_batch_translate(ref_num_render, 'es')) if ref_num_render else None
-            assessment_steps = await llm_batch_translate(assessment_steps, 'es')
+            org_id_render = (
+                (await llm_batch_translate(org_id_render, "es"))
+                if org_id_render
+                else None
+            )
+            ref_num_render = (
+                (await llm_batch_translate(ref_num_render, "es"))
+                if ref_num_render
+                else None
+            )
+            assessment_steps = await llm_batch_translate(assessment_steps, "es")
             t_translate_end = time.time()
-            logger.info(f"Translation to Spanish took {t_translate_end - t_translate_start:.2f}s (LLM batch)")
+            logger.info(
+                f"Translation to Spanish took {t_translate_end - t_translate_start:.2f}s (LLM batch)"
+            )
 
         # Centralized dynamic labels for LaTeX template
         vars = {
-            "treatment_plan": "PLAN DE TRATAMIENTO" if request.language == "esp" else "TREATMENT PLAN",
+            "treatment_plan": (
+                "PLAN DE TRATAMIENTO" if request.language == "esp" else "TREATMENT PLAN"
+            ),
             "reference": "Referencia" if request.language == "esp" else "Reference",
-            "patient_name": "Nombre del Paciente" if request.language == "esp" else "Patient Name",
-            "patient_id": "ID del Paciente" if request.language == "esp" else "Patient ID",
+            "patient_name": (
+                "Nombre del Paciente" if request.language == "esp" else "Patient Name"
+            ),
+            "patient_id": (
+                "ID del Paciente" if request.language == "esp" else "Patient ID"
+            ),
             "dob": "Fecha de Nacimiento" if request.language == "esp" else "DOB",
             "gender": "Género" if request.language == "esp" else "Gender",
-            "doctor_name": "Nombre del Doctor" if request.language == "esp" else "Doctor Name",
+            "doctor_name": (
+                "Nombre del Doctor" if request.language == "esp" else "Doctor Name"
+            ),
             "doctor_id": "ID del Doctor" if request.language == "esp" else "Doctor ID",
-            "signature": "Firma del Doctor" if request.language == "esp" else "Doctor Signature",
-            "organization_id": "ID de la Organización" if request.language == "esp" else "Organization ID",
-            "problem_list": "Lista de Problemas" if request.language == "esp" else "Problem List",
+            "signature": (
+                "Firma del Doctor" if request.language == "esp" else "Doctor Signature"
+            ),
+            "organization_id": (
+                "ID de la Organización"
+                if request.language == "esp"
+                else "Organization ID"
+            ),
+            "problem_list": (
+                "Lista de Problemas" if request.language == "esp" else "Problem List"
+            ),
             "allergies": "Alergias" if request.language == "esp" else "Allergies",
-            "allergy_name": "Nombre de la Alergia" if request.language == "esp" else "Allergy Name",
-            "allergy_type": "Tipo de Alergia" if request.language == "esp" else "Allergy Type",
-            "severity_level": "Nivel de Severidad" if request.language == "esp" else "Severity Level",
+            "allergy_name": (
+                "Nombre de la Alergia" if request.language == "esp" else "Allergy Name"
+            ),
+            "allergy_type": (
+                "Tipo de Alergia" if request.language == "esp" else "Allergy Type"
+            ),
+            "severity_level": (
+                "Nivel de Severidad" if request.language == "esp" else "Severity Level"
+            ),
             "vitals": "Signos Vitales" if request.language == "esp" else "Vitals",
             "height": "Altura" if request.language == "esp" else "Height",
             "weight": "Peso" if request.language == "esp" else "Weight",
             "bmi": "IMC" if request.language == "esp" else "BMI",
-            "heart_rate": "Frecuencia Cardíaca" if request.language == "esp" else "Heart Rate",
-            "blood_pressure": "Presión Arterial" if request.language == "esp" else "Blood Pressure",
-            "active_medications": "Medicamentos Activos" if request.language == "esp" else "Active Medications",
-            "medication_name": "Nombre del Medicamento" if request.language == "esp" else "Medication Name",
+            "heart_rate": (
+                "Frecuencia Cardíaca" if request.language == "esp" else "Heart Rate"
+            ),
+            "blood_pressure": (
+                "Presión Arterial" if request.language == "esp" else "Blood Pressure"
+            ),
+            "active_medications": (
+                "Medicamentos Activos"
+                if request.language == "esp"
+                else "Active Medications"
+            ),
+            "medication_name": (
+                "Nombre del Medicamento"
+                if request.language == "esp"
+                else "Medication Name"
+            ),
             "qty": "Cantidad" if request.language == "esp" else "Qty",
             "dosage": "Dosis" if request.language == "esp" else "Dosage",
             "reason": "Razón" if request.language == "esp" else "Reason",
-            "instruction": "Instrucción" if request.language == "esp" else "Instruction",
-            "assessment_plan": "Plan de Evaluación" if request.language == "esp" else "Assessment Plan",
+            "instruction": (
+                "Instrucción" if request.language == "esp" else "Instruction"
+            ),
+            "assessment_plan": (
+                "Plan de Evaluación" if request.language == "esp" else "Assessment Plan"
+            ),
         }
         # Render LaTeX with all data
         filled_latex = template.render(
@@ -1066,7 +1277,7 @@ async def generate_treatment_plan(request: TreatmentPlanRequest):
             assessment_steps=assessment_steps,
             organization_id=org_id_render,
             reference_number=ref_num_render,
-            vars=vars
+            vars=vars,
         )
 
         # # Translate to Spanish if requested
@@ -1086,14 +1297,20 @@ async def generate_treatment_plan(request: TreatmentPlanRequest):
             return Response(
                 content=pdf_bytes,
                 media_type="application/pdf",
-                headers={"Content-Disposition": "attachment; filename=treatment_plan.pdf"}
+                headers={
+                    "Content-Disposition": "attachment; filename=treatment_plan.pdf"
+                },
             )
         except HTTPException:
             logger.warning("PDF generation failed, falling back to LaTeX file")
-            with tempfile.NamedTemporaryFile(delete=False, mode="w", suffix=".tex") as  tmp_file:
+            with tempfile.NamedTemporaryFile(
+                delete=False, mode="w", suffix=".tex"
+            ) as tmp_file:
                 tmp_file.write(filled_latex)
                 tex_path = tmp_file.name
-            return FileResponse(tex_path, filename="treatment_plan.tex", media_type="application/x-tex")
+            return FileResponse(
+                tex_path, filename="treatment_plan.tex", media_type="application/x-tex"
+            )
 
     except Exception as e:
         logger.error(traceback.format_exc())
@@ -1102,6 +1319,7 @@ async def generate_treatment_plan(request: TreatmentPlanRequest):
 
 # Global MySQL connection (initialized at startup)
 mysql_connection = None
+
 
 def init_mysql_connection():
     global mysql_connection
@@ -1114,15 +1332,17 @@ def init_mysql_connection():
         )
         logger.info("MySQL connection established at startup.")
 
+
 def replace_underscores(obj):
     if isinstance(obj, dict):
         return {k: replace_underscores(v) for k, v in obj.items()}
     elif isinstance(obj, list):
         return [replace_underscores(i) for i in obj]
     elif isinstance(obj, str):
-        return obj.replace('_', ' ')
+        return obj.replace("_", " ")
     else:
         return obj
+
 
 def latex_to_pdf(latex_content: str) -> bytes:
     """
@@ -1134,34 +1354,42 @@ def latex_to_pdf(latex_content: str) -> bytes:
         with tempfile.TemporaryDirectory() as temp_dir:
             # Write LaTeX content to temporary file
             tex_file_path = os.path.join(temp_dir, "document.tex")
-            with open(tex_file_path, 'w', encoding='utf-8') as f:
+            with open(tex_file_path, "w", encoding="utf-8") as f:
                 f.write(latex_content)
-            
+
             # Run pdflatex to compile the document
             result = subprocess.run(
-                ['pdflatex', '-interaction=nonstopmode', '-output-directory', temp_dir, tex_file_path],
+                [
+                    "pdflatex",
+                    "-interaction=nonstopmode",
+                    "-output-directory",
+                    temp_dir,
+                    tex_file_path,
+                ],
                 capture_output=True,
                 text=True,
-                timeout=30  # 30 second timeout
+                timeout=30,  # 30 second timeout
             )
-            
+
             # Check if compilation was successful
             pdf_file_path = os.path.join(temp_dir, "document.pdf")
             if not os.path.exists(pdf_file_path):
                 logger.error(f"LaTeX compilation failed: {result.stderr}")
                 raise HTTPException(status_code=500, detail="LaTeX compilation failed")
-            
+
             # Read the generated PDF
-            with open(pdf_file_path, 'rb') as f:
+            with open(pdf_file_path, "rb") as f:
                 pdf_bytes = f.read()
-            
+
             return pdf_bytes
-            
+
     except subprocess.TimeoutExpired:
         logger.error("LaTeX compilation timed out")
         raise HTTPException(status_code=500, detail="LaTeX compilation timed out")
     except FileNotFoundError:
-        logger.error("pdflatex not found. Please install LaTeX distribution (e.g., TeX Live)")
+        logger.error(
+            "pdflatex not found. Please install LaTeX distribution (e.g., TeX Live)"
+        )
         raise HTTPException(status_code=500, detail="LaTeX distribution not installed")
     except Exception as e:
         logger.error(f"Error in LaTeX to PDF conversion: {str(e)}")
@@ -1170,4 +1398,3 @@ def latex_to_pdf(latex_content: str) -> bytes:
 
 # Initialize MySQL connection at app startup
 init_mysql_connection()
-
