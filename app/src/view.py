@@ -1088,7 +1088,7 @@ async def generate_treatment_plan(request: TreatmentPlanRequest):
             f"LANGUAGE: {language}"
         )
         t2 = time.time()
-        llm_response = await simple_openai_chat(assessment_prompt, model=OPENAI_MODEL_TREATMENT_GENERATION)
+        llm_response = await simple_openai_chat(assessment_prompt)
         t3 = time.time()
         logger.info(f"LLM call took {t3-t2:.2f}s")
         logger.info(f"LLM response size: {len(llm_response)} chars")
@@ -1154,7 +1154,7 @@ async def generate_treatment_plan(request: TreatmentPlanRequest):
                 "Return a JSON array of translations:"
                 f"{json.dumps(strings)}"
             )
-            response = await simple_openai_chat(prompt, model=OPENAI_MODEL_TREATMENT_GENERATION)
+            response = await simple_openai_chat(prompt)
             match = re.search(r"\[.*\]", response, re.DOTALL)
             if match:
                 translated = json.loads(match.group())

@@ -362,7 +362,7 @@ async def simple_openai_chat(prompt: str) -> str:
     """
     Sends a prompt to the OpenAI LLM and returns the response. No RAG, no tools, just a direct chat completion.
     """
-    model = os.environ.get("OPENAI_MODEL")
+    model = os.environ.get("OPENAI_MODEL_TREATMENT_GENERATION")
     api_key = os.environ.get("OPENAI_API_KEY")
     if not api_key:
         raise RuntimeError("OPENAI_API_KEY environment variable not set.")
