@@ -142,7 +142,9 @@ class UpdateUser(BaseModel):
 
 class TreatmentPlanRequest(BaseModel):
     patient_id: int
-    doctor_name: str
-    doctor_id: str
     organization_id: str
-    reference_number: str
+    doctor_name: Optional[str] = None
+    doctor_id: Optional[str] = None
+    reference_number: Optional[str] = None
+    language: Optional[str] = None
+

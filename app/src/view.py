@@ -33,6 +33,7 @@ from io import BytesIO
 from jinja2 import Template, Environment
 import random
 import string
+from deep_translator import GoogleTranslator
 
 oauth2scheme = OAuth2PasswordBearer(
     tokenUrl="token",
@@ -766,31 +767,24 @@ async def generate_treatment_plan(request: TreatmentPlanRequest):
         cursor = connection.cursor(dictionary=True)
 
         cursor.execute("SELECT * FROM patients WHERE id = %s", (patient_id,))
-
         patient = cursor.fetchone()
 
         cursor.execute("SELECT * FROM allergies WHERE patientId = %s", (patient_id,))
-
         allergies = cursor.fetchall()
 
         cursor.execute("SELECT * FROM problem WHERE patient_id = %s", (patient_id,))
-
         problems = cursor.fetchall()
 
         cursor.execute("SELECT * FROM patient_medications WHERE patient_id = %s", (patient_id,))
-
         medications = cursor.fetchall()
 
         cursor.execute("SELECT * FROM vitals WHERE patientId = %s", (patient_id,))
-
         vitals = cursor.fetchall()
 
         cursor.execute("SELECT * FROM laboratory WHERE patientId = %s", (patient_id,))
-
         laboratory = cursor.fetchall()
 
         cursor.execute("SELECT * FROM family_history WHERE patientId = %s", (patient_id,))
-
         family_history = cursor.fetchall()
 
         cursor.close()
@@ -824,28 +818,28 @@ async def generate_treatment_plan(request: TreatmentPlanRequest):
 \begin{document}
 
 \begin{center}
-\Large\textbf{TREATMENT PLAN} \\[6pt]
-\small\textbf{Reference \:} \texttt{[[ reference_number ]]}
+\Large\textbf{[[ vars.treatment_plan ]]} \\[6pt]
+\small\textbf{[[ vars.reference ]] \:} \texttt{[[ reference_number ]]}
 \end{center}
 
 \noindent
 \makebox[\textwidth]{
 \begin{tabular}{|>{\columncolor{lightgray}}L{0.18\textwidth}|L{0.22\textwidth}|>{\columncolor{lightgray}}L{0.18\textwidth}|L{0.22\textwidth}|>{\columncolor{lightgray}}L{0.18\textwidth}|L{0.22\textwidth}|}
 \hline
-\textbf{Patient Name} & [[ patient.name ]] & \textbf{Patient ID} & [[ patient.id ]] \\
+\textbf{[[ vars.patient_name ]]} & [[ patient.name ]] & \textbf{[[ vars.patient_id ]]} & [[ patient.id ]] \\
 \hline
-\textbf{DOB} & [[ patient.dob ]] & \textbf{Gender} & [[ patient.gender ]] \\
+\textbf{[[ vars.dob ]]} & [[ patient.dob ]] & \textbf{[[ vars.gender ]]} & [[ patient.gender ]] \\
 \hline
-\textbf{Doctor Name} & [[ doctor.name ]] & \textbf{Doctor ID} & [[ doctor.id ]] \\
+\textbf{[[ vars.doctor_name ]]} & [[ doctor.name ]] & \textbf{[[ vars.doctor_id ]]} & [[ doctor.id ]] \\
 \hline
-\textbf{Doctor Signature} & [[ doctor.signature ]] & \textbf{Organization ID} & [[ organization_id ]] \\
+\textbf{[[ vars.signature ]]} & [[ doctor.signature ]] & \textbf{[[ vars.organization_id ]]} & [[ organization_id ]] \\
 \hline
 \end{tabular}
 }
 
 \vspace{24pt}
 
-\section*{Problem List}
+\section*{[[ vars.problem_list ]]}
 \begin{enumerate}[label=\arabic*.]
 [% for p in problems %]
   \item [[ p.description ]]
@@ -854,11 +848,11 @@ async def generate_treatment_plan(request: TreatmentPlanRequest):
 
 \vspace{24pt}
 
-\section*{Allergies}
+\section*{[[ vars.allergies ]]}
 \makebox[\textwidth]{
 \begin{tabular}{|>{\columncolor{lightgray}}L{0.33\textwidth}|>{\columncolor{lightgray}}L{0.33\textwidth}|>{\columncolor{lightgray}}L{0.33\textwidth}|}
 \hline
-\textbf{Allergy Name} & \textbf{Allergy Type} & \textbf{Severity Level} \\
+\textbf{[[ vars.allergy_name ]]} & \textbf{[[ vars.allergy_type ]]} & \textbf{[[ vars.severity_level ]]} \\
 \hline
 [% for a in allergies %]
 [[ a.name ]] & [[ a.type ]] & [[ a.severity ]] \\
@@ -869,11 +863,11 @@ async def generate_treatment_plan(request: TreatmentPlanRequest):
 
 \vspace{24pt}
 
-\section*{Vitals}
+\section*{[[ vars.vitals ]]}
 \makebox[\textwidth]{
 \begin{tabular}{|>{\columncolor{lightgray}}L{0.19\textwidth}|>{\columncolor{lightgray}}L{0.19\textwidth}|>{\columncolor{lightgray}}L{0.19\textwidth}|>{\columncolor{lightgray}}L{0.19\textwidth}|>{\columncolor{lightgray}}L{0.19\textwidth}|}
 \hline
-\textbf{Height} & \textbf{Weight} & \textbf{BMI} & \textbf{Heart Rate} & \textbf{Blood Pressure} \\
+\textbf{[[ vars.height ]]} & \textbf{[[ vars.weight ]]} & \textbf{[[ vars.bmi ]]} & \textbf{[[ vars.heart_rate ]]} & \textbf{[[ vars.blood_pressure ]]} \\
 \hline
 [% for v in vitals %]
 [[ v.height ]] & [[ v.weight ]] & [[ v.bmi ]] & [[ v.heart_rate ]] & [[ v.blood_pressure ]] \\
@@ -883,16 +877,16 @@ async def generate_treatment_plan(request: TreatmentPlanRequest):
 }
 \vspace{4pt}
 [% if vitals %]
-{\footnotesize \textit{Vitals recorded on: [[ vitals[0].date ]] }}
+{\footnotesize \textit{[[ vars.vitals ]] recorded on: [[ vitals[0].date ]] }}
 [% endif %]
 
 \vspace{24pt}
 
-\section*{Active Medications}
+\section*{[[ vars.active_medications ]]}
 \makebox[\textwidth]{
 \begin{tabular}{|>{\columncolor{lightgray}}L{0.2\textwidth}|>{\columncolor{lightgray}}L{0.12\textwidth}|>{\columncolor{lightgray}}L{0.2\textwidth}|>{\columncolor{lightgray}}L{0.2\textwidth}|>{\columncolor{lightgray}}L{0.28\textwidth}|}
 \hline
-\textbf{Medication Name} & \textbf{Qty} & \textbf{Dosage} & \textbf{Reason} & \textbf{Instruction} \\
+\textbf{[[ vars.medication_name ]]} & \textbf{[[ vars.qty ]]} & \textbf{[[ vars.dosage ]]} & \textbf{[[ vars.reason ]]} & \textbf{[[ vars.instruction ]]} \\
 \hline
 [% for m in medications %]
 [[ m.name ]] & [[ m.qty ]] & [[ m.dosage ]] & [[ m.reason ]] & [[ m.instruction ]] \\
@@ -903,7 +897,7 @@ async def generate_treatment_plan(request: TreatmentPlanRequest):
 
 \vspace{24pt}
 
-\section*{Assessment Plan}
+\section*{[[ vars.assessment_plan ]]}
 \begin{itemize}
 [% for step in assessment_steps %]
   \item [[ step.step_description ]][% if step.timeline %] --- [[ step.timeline ]][% endif %]
@@ -936,8 +930,9 @@ async def generate_treatment_plan(request: TreatmentPlanRequest):
         summary = f"Patient: {patient_name}, Problems: {problems_list}, Allergies: {allergies_list}, Medications: {medications_list}"
         assessment_prompt = (
             "Given the following patient summary, generate an assessment plan as a JSON array (7-10 steps, each with 'step_description' and 'timeline'). "
-            "No explanations, no markdown, just valid JSON. If the patient's data is insufficient, you may share no assesment steps\n\n"
+            "No explanations, no markdown, just valid JSON. if the lamguage is 'esp', then your response should be in spanish. \n\n"
             f"PATIENT SUMMARY: {summary}"
+            f"LANGUAGE: {request.language}"
         )
         t2 = time.time()
         llm_response = await simple_openai_chat(assessment_prompt)
@@ -958,6 +953,14 @@ async def generate_treatment_plan(request: TreatmentPlanRequest):
         t5 = time.time()
         logger.info(f"LLM response parsing took {t5-t4:.2f}s")
 
+        # Remove wrap_latex_safe and use assessment_steps directly
+        # if isinstance(assessment_steps, list):
+        #     for step in assessment_steps:
+        #         if 'step_description' in step and step['step_description']:
+        #             step['step_description'] = wrap_latex_safe(step['step_description'])
+        #         if 'timeline' in step and step['timeline']:
+        #             step['timeline'] = wrap_latex_safe(step['timeline'])
+
         # Before rendering, replace underscores with spaces in all template data
         patient = replace_underscores(filtered_data["patient"])
         doctor = replace_underscores(filtered_data["doctor"])
@@ -968,6 +971,91 @@ async def generate_treatment_plan(request: TreatmentPlanRequest):
         org_id_render = replace_underscores(organization_id) if organization_id else None
         ref_num_render = replace_underscores(reference_number) if reference_number else None
 
+        # Async batch translation using LLM
+        async def llm_batch_translate(obj, target_lang='es'):
+            strings = []
+            def collect_strings(o):
+                if isinstance(o, dict):
+                    for v in o.values():
+                        collect_strings(v)
+                elif isinstance(o, list):
+                    for i in o:
+                        collect_strings(i)
+                elif isinstance(o, str):
+                    strings.append(o)
+            collect_strings(obj)
+            if not strings:
+                return obj
+            prompt = (
+                f'Translate the following list of English phrases to {target_lang}. '
+                'Return a JSON array of translations:'
+                f'{json.dumps(strings)}'
+            )
+            response = await simple_openai_chat(prompt)
+            match = re.search(r'\[.*\]', response, re.DOTALL)
+            if match:
+                translated = json.loads(match.group())
+            else:
+                raise Exception('LLM did not return valid JSON array')
+            it = iter(translated)
+            def reconstruct(o):
+                if isinstance(o, dict):
+                    return {k: reconstruct(v) for k, v in o.items()}
+                elif isinstance(o, list):
+                    return [reconstruct(i) for i in o]
+                elif isinstance(o, str):
+                    return next(it)
+                else:
+                    return o
+            return reconstruct(obj)
+
+        # Translate all data to Spanish if requested (batch, LLM)
+        if getattr(request, 'language', None) == 'esp':
+            t_translate_start = time.time()
+            patient = await llm_batch_translate(patient, 'es')
+            doctor = await llm_batch_translate(doctor, 'es')
+            problems = await llm_batch_translate(problems, 'es')
+            allergies = await llm_batch_translate(allergies, 'es')
+            vitals = await llm_batch_translate(vitals, 'es')
+            medications = await llm_batch_translate(medications, 'es')
+            # For org_id_render and ref_num_render, use LLM for consistency
+            org_id_render = (await llm_batch_translate(org_id_render, 'es')) if org_id_render else None
+            ref_num_render = (await llm_batch_translate(ref_num_render, 'es')) if ref_num_render else None
+            assessment_steps = await llm_batch_translate(assessment_steps, 'es')
+            t_translate_end = time.time()
+            logger.info(f"Translation to Spanish took {t_translate_end - t_translate_start:.2f}s (LLM batch)")
+
+        # Centralized dynamic labels for LaTeX template
+        vars = {
+            "treatment_plan": "PLAN DE TRATAMIENTO" if request.language == "esp" else "TREATMENT PLAN",
+            "reference": "Referencia" if request.language == "esp" else "Reference",
+            "patient_name": "Nombre del Paciente" if request.language == "esp" else "Patient Name",
+            "patient_id": "ID del Paciente" if request.language == "esp" else "Patient ID",
+            "dob": "Fecha de Nacimiento" if request.language == "esp" else "DOB",
+            "gender": "Género" if request.language == "esp" else "Gender",
+            "doctor_name": "Nombre del Doctor" if request.language == "esp" else "Doctor Name",
+            "doctor_id": "ID del Doctor" if request.language == "esp" else "Doctor ID",
+            "signature": "Firma del Doctor" if request.language == "esp" else "Doctor Signature",
+            "organization_id": "ID de la Organización" if request.language == "esp" else "Organization ID",
+            "problem_list": "Lista de Problemas" if request.language == "esp" else "Problem List",
+            "allergies": "Alergias" if request.language == "esp" else "Allergies",
+            "allergy_name": "Nombre de la Alergia" if request.language == "esp" else "Allergy Name",
+            "allergy_type": "Tipo de Alergia" if request.language == "esp" else "Allergy Type",
+            "severity_level": "Nivel de Severidad" if request.language == "esp" else "Severity Level",
+            "vitals": "Signos Vitales" if request.language == "esp" else "Vitals",
+            "height": "Altura" if request.language == "esp" else "Height",
+            "weight": "Peso" if request.language == "esp" else "Weight",
+            "bmi": "IMC" if request.language == "esp" else "BMI",
+            "heart_rate": "Frecuencia Cardíaca" if request.language == "esp" else "Heart Rate",
+            "blood_pressure": "Presión Arterial" if request.language == "esp" else "Blood Pressure",
+            "active_medications": "Medicamentos Activos" if request.language == "esp" else "Active Medications",
+            "medication_name": "Nombre del Medicamento" if request.language == "esp" else "Medication Name",
+            "qty": "Cantidad" if request.language == "esp" else "Qty",
+            "dosage": "Dosis" if request.language == "esp" else "Dosage",
+            "reason": "Razón" if request.language == "esp" else "Reason",
+            "instruction": "Instrucción" if request.language == "esp" else "Instruction",
+            "assessment_plan": "Plan de Evaluación" if request.language == "esp" else "Assessment Plan",
+        }
         # Render LaTeX with all data
         filled_latex = template.render(
             patient=patient,
@@ -978,8 +1066,17 @@ async def generate_treatment_plan(request: TreatmentPlanRequest):
             medications=medications,
             assessment_steps=assessment_steps,
             organization_id=org_id_render,
-            reference_number=ref_num_render
+            reference_number=ref_num_render,
+            vars=vars
         )
+
+        # # Translate to Spanish if requested
+        # if getattr(request, 'language', None) == 'esp':
+        #     try:
+        #         filled_latex = GoogleTranslator(source='auto', target='es').translate(filled_latex)
+        #     except Exception as e:
+        #         logger.error(f"Translation to Spanish failed: {e}")
+        #         raise HTTPException(status_code=500, detail=f"Translation to Spanish failed: {e}")
 
         # Step 6: Convert LaTeX to PDF and return
         t6 = time.time()
