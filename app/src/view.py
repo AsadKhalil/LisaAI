@@ -919,7 +919,7 @@ async def generate_treatment_plan(request: TreatmentPlanRequest):
             lstrip_blocks=True
         )
         template = env.from_string(latex_template)
-
+        language = request.language if hasattr(request, 'language') else 'eng'
 
         # Call LLM only for assessment steps
         patient_name = filtered_data['patient']['name']
@@ -931,7 +931,7 @@ async def generate_treatment_plan(request: TreatmentPlanRequest):
             "Given the following patient summary, generate an assessment plan as a JSON array (7-10 steps, each with 'step_description' and 'timeline'). "
             "No explanations, no markdown, just valid JSON. if the lamguage is 'esp', then your response should be in spanish. \n\n"
             f"PATIENT SUMMARY: {summary}"
-            f"LANGUAGE: {request.language}"
+            f"LANGUAGE: {language}"
         )
         t2 = time.time()
         llm_response = await simple_openai_chat(assessment_prompt)
