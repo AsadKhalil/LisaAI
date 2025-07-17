@@ -33,7 +33,6 @@ from io import BytesIO
 from jinja2 import Template, Environment
 import random
 import string
-from deep_translator import GoogleTranslator
 
 oauth2scheme = OAuth2PasswordBearer(
     tokenUrl="token",
