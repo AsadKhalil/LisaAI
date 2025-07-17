@@ -28,7 +28,6 @@ mysql-connector-python = "^9.3.0"
 reportlab = "^4.4.2"
 subprocess32 = "^3.5.4"
 
-
 [build-system]
 requires = ["poetry-core"]
 build-backend = "poetry.core.masonry.api"
