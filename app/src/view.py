@@ -1071,7 +1071,10 @@ async def generate_treatment_plan(request: TreatmentPlanRequest):
         template = env.from_string(latex_template)
         language = request.language if hasattr(request, "language") else "eng"
         logger.info(f"Language for treatment plan: {language}")
+        # Get the LLM model for treatment generation from .env
+        OPENAI_MODEL_TREATMENT_GENERATION = os.environ.get("OPENAI_MODEL_TREATMENT_GENERATION")
         # Call LLM only for assessment steps
+        # Pass the model name to simple_openai_chat
         patient_name = filtered_data["patient"]["name"]
         problems_list = [p.get("description") for p in filtered_data["problems"]]
         allergies_list = [a.get("name") for a in filtered_data["allergies"]]
@@ -1085,7 +1088,7 @@ async def generate_treatment_plan(request: TreatmentPlanRequest):
             f"LANGUAGE: {language}"
         )
         t2 = time.time()
-        llm_response = await simple_openai_chat(assessment_prompt)
+        llm_response = await simple_openai_chat(assessment_prompt, model=OPENAI_MODEL_TREATMENT_GENERATION)
         t3 = time.time()
         logger.info(f"LLM call took {t3-t2:.2f}s")
         logger.info(f"LLM response size: {len(llm_response)} chars")
@@ -1151,7 +1154,7 @@ async def generate_treatment_plan(request: TreatmentPlanRequest):
                 "Return a JSON array of translations:"
                 f"{json.dumps(strings)}"
             )
-            response = await simple_openai_chat(prompt)
+            response = await simple_openai_chat(prompt, model=OPENAI_MODEL_TREATMENT_GENERATION)
             match = re.search(r"\[.*\]", response, re.DOTALL)
             if match:
                 translated = json.loads(match.group())
