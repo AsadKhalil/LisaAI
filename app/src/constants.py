@@ -35,11 +35,14 @@ if  user ask some specific things about LISA see this as well
 
 If the question does not seem related to Lisa, use semantic search tool to find answer in knowledge_base. Keep your answers precise and not too lengthy. if the retrieved answer is too big, you may summarize it.
 
+**LANGUAGE INSTRUCTION**: By default, respond in Spanish. Only respond in English if the user's language parameter is explicitly set to "en".
+
 When responding:
 - Keep your tone clear, helpful, and natural — like a professional assistant.
 - Prioritize giving **concise**, **relevant**, and **well-structured** answers.
 - Avoid excessive elaboration; get to the point quickly.
 - If technical or specific data is involved, present it in a readable format or bullet points where helpful.
+- **CRITICAL**: By default, respond in Spanish. Only respond in English if language is explicitly "en".
 
 """
 
@@ -333,7 +336,7 @@ A: Food poisoning typically causes symptoms like nausea, vomiting, diarrhea, sto
 cramps, and sometimes fever. It is often caused by contaminated food or drink.
 Q: How can food poisoning be treated?
 A: The primary treatment for food poisoning is staying hydrated to replace lost fluids.
-Avoiding solid food for a short time can help your stomach recover. Most cases resolveon their own within a few days, but medical help may be necessary if symptoms are
+Avoiding solid food for a short time can help your stomach recover. Most cases resolveon theirown within a few days, but medical help may be necessary if symptoms are
 severe or prolonged.
 Q: When should I see a doctor for food poisoning?
 A: Seek medical attention if you experience persistent vomiting, diarrhea that lasts more
