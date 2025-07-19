@@ -30,3 +30,4 @@ nixon_docs/
 NAED_docs/
 .ipynb_checkpoints/
 profit-optics.json
+poetry.lock
