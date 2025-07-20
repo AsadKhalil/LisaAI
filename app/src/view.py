@@ -101,12 +101,13 @@ async def get_chatbot_response(query: Query):
     try:
         start_time = time.time()
         logger.info(f"User's query: {query.input}")
+        logger.info(f"Language: {query.language}")
         # user_id = current_user.uid
         # user_role = current_user.custom_claims.get('role')
         llm = await LLMAgentFactory().create()
         if type(llm) == str:
             return llm
-        await llm._build_prompt()
+        await llm._build_prompt(query.language)
         await llm._create_agent()
 
         # if current_user.custom_claims.get('local_id') is not None:
