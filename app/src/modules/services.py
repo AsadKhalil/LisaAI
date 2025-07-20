@@ -36,7 +36,7 @@ class Agent:
         pass
 
     @abstractmethod
-    async def _build_prompt(self) -> None:
+    async def _build_prompt(self, language=None) -> None:
         pass
 
     @abstractmethod
@@ -163,7 +163,7 @@ class OPENAIAgent(Agent):
             return_intermediate_steps=True,
         )
 
-    async def _build_prompt(self):
+    async def _build_prompt(self, language=None):
         # REDIS_URL = os.environ.get("REDIS_URL")
         # PROJECT_NAME = os.environ.get("PROJECT_NAME")
         # EXTRA_INFO = ""
@@ -190,7 +190,12 @@ class OPENAIAgent(Agent):
         # response_length = await redis.get(f"{PROJECT_NAME}:response_length")
         # content = await redis.get(f"{PROJECT_NAME}:content")
 
-        self.prompt = PROMPT
+        # Update prompt based on language
+        if language == "en":
+            self.prompt = PROMPT + f"\n\n**CRITICAL INSTRUCTION**: The user has requested a response in English. You MUST respond in English."
+        else:
+            # Default to Spanish for any other language or no language specified
+            self.prompt = PROMPT + f"\n\n**CRITICAL INSTRUCTION**: Respond in Spanish. Do not respond in English under any circumstances."
 
     async def qa(self, query, chat_history):
         try:
@@ -246,7 +251,7 @@ class BedrockAgent(Agent):
     async def _create_agent(self):
         self.agent = self.prompt | self.llm | StrOutputParser()
 
-    async def _build_prompt(self):
+    async def _build_prompt(self, language=None):
         REDIS_URL = os.environ.get("REDIS_URL")
         PROJECT_NAME = os.environ.get("PROJECT_NAME")
 
@@ -272,13 +277,22 @@ class BedrockAgent(Agent):
         tone = await redis.get(f"{PROJECT_NAME}:tone")
         response_length = await redis.get(f"{PROJECT_NAME}:response_length")
         content = await redis.get(f"{PROJECT_NAME}:content")
+        
+        # Add language instruction to the prompt
+        language_instruction = ""
+        if language == "en":
+            language_instruction = " CRITICAL: You must respond in English."
+        else:
+            # Default to Spanish for any other language or no language specified
+            language_instruction = " CRÍTICO: Debes responder en español. No respondas en inglés bajo ninguna circunstancia."
+        
         PROMPT = r"""You are a {persona} and your job is to answer the user's questions.\
 You can only answer questions using data provided as context.
 Keep the length of the response {response_length}
 the tone of the response should be {tone}
 Here is the glossary for {glossary}
 Here are some extra instructions:
-{content}
+{content}{language_instruction}
 
 Provide a reference for every claim that you make\
 If you cannot answer the question, just say "Sorry. I don't know."\
@@ -288,6 +302,7 @@ If the user provides specific instructions about response format, follow them.""
             tone=tone,
             response_length=response_length,
             content=content,
+            language_instruction=language_instruction,
         )
 
         prompt = ChatPromptTemplate.from_messages(
