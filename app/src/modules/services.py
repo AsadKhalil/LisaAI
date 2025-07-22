@@ -164,38 +164,14 @@ class OPENAIAgent(Agent):
         )
 
     async def _build_prompt(self, language=None):
-        # REDIS_URL = os.environ.get("REDIS_URL")
-        # PROJECT_NAME = os.environ.get("PROJECT_NAME")
-        # EXTRA_INFO = ""
-        # if PROJECT_NAME == "naw":
-        #     EXTRA_INFO = f"""
-        #     Here are the two books that you have access to:
-
-        #     Outlines:
-
-        #     FTFOC - Innovate to Dominate:
-        #     {constants.OUTLINE_FTFOC_Innovate_to_Dominate}
-
-        #     Mergers and Acquisitions:
-        #     {constants.OUTLINE_Mergers_and_Acquisitions}
-        #     """
-
-        # redis = aioredis.from_url(
-        #     REDIS_URL, encoding="utf-8", decode_responses=True)
-        # self.llm_model_id = await redis.get(f"{PROJECT_NAME}:llm_model",)
+        self.logger.info(f"[DEBUG] _build_prompt called with language: {language}")
         self.llm_model_id = os.environ.get("OPENAI_MODEL")
-        # persona = await redis.get(f"{PROJECT_NAME}:persona",)
-        # glossary = await redis.get(f"{PROJECT_NAME}:glossary",)
-        # tone = await redis.get(f"{PROJECT_NAME}:tone")
-        # response_length = await redis.get(f"{PROJECT_NAME}:response_length")
-        # content = await redis.get(f"{PROJECT_NAME}:content")
-
         # Update prompt based on language
         if language == "en":
-            self.prompt = PROMPT + f"\n\n**CRITICAL INSTRUCTION**: The user has requested a response in English. You MUST respond in English."
+            self.prompt = PROMPT + "\n\n**CRITICAL INSTRUCTION**: From now on, respond only in English, regardless of previous conversation language. Do NOT respond in Spanish or any other language."
         else:
-            # Default to Spanish for any other language or no language specified
-            self.prompt = PROMPT + f"\n\n**CRITICAL INSTRUCTION**: Respond in Spanish. Do not respond in English under any circumstances."
+            self.prompt = PROMPT + "\n\n**INSTRUCCIÓN CRÍTICA**: Debes responder en español. No respondas en inglés ni en ningún otro idioma."
+        self.logger.info(f"[DEBUG] Prompt set in _build_prompt: {self.prompt}")
 
     async def qa(self, query, chat_history):
         try:
