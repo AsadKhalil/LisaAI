@@ -112,6 +112,12 @@ async def get_chatbot_response(query: Query):
         user_id = int(query.userId) if getattr(query, "userId", None) not in (None, "") else None
         
         await llm._build_prompt(query.language)
+        
+        # Set the user_id for the agent if it's an OPENAIAgent
+        if hasattr(llm, 'set_user_id') and user_id is not None:
+            llm.set_user_id(user_id)
+            logger.info(f"Set user_id {user_id} for LLM agent")
+        
         await llm._create_agent()
 
         # if current_user.custom_claims.get('local_id') is not None:
@@ -138,14 +144,8 @@ async def get_chatbot_response(query: Query):
                     }
                 )
 
-        # Add user_id to the query context so the LLM can use it
-        if user_id is not None:
-            query_with_user = f"User ID: {user_id}\n\nQuery: {query.input}"
-        else:
-            query_with_user = query.input
-
-        # chatbot's response
-        response, context = await llm.qa(query_with_user, chat_history)
+        # chatbot's response - use original query without embedding user_id in prompt
+        response, context = await llm.qa(query.input, chat_history)
         end_time = time.time()
         response_time = end_time - start_time
         conversation_id = json.dumps(str(conversation_id))
