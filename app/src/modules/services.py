@@ -87,6 +87,12 @@ class OPENAIAgent(Agent):
         self.logger.info("connection string: %s", self.conn_string)
         self.engine = create_engine(self.conn_string)
         self.db = ConversationDB()
+        self.user_id = None  # Will be set when agent is created
+
+    def set_user_id(self, user_id: int):
+        """Set the user ID for this agent instance"""
+        self.user_id = user_id
+        self.logger.info(f"User ID set for agent: {user_id}")
 
     async def _create_agent(self) -> None:
         self.llm = ChatOpenAI(model=self.llm_model_id, temperature=0.3)
@@ -123,13 +129,20 @@ class OPENAIAgent(Agent):
             return context
 
         @tool
-        async def get_encounter_data(user_id: int):
+        async def get_encounter_data():
             """
             Extract comprehensive encounter data for a patient. Use this when the user requests encounter summaries, 
             medical record summaries, or patient encounter information.
+            
+            IMPORTANT: User ID cannot be extracted from the prompt text. The response will only be related to the 
+            user ID provided in the request parameters. Only use this function when the user is requesting their 
+            own medical data or encounter summaries.
             """
+            if self.user_id is None:
+                return "Error: No user ID available to retrieve encounter data."
+            
             from app.src.view import extract_encounter_data
-            return extract_encounter_data(user_id)
+            return extract_encounter_data(self.user_id)
 
         tools = [semantic_search, get_encounter_data]
 
