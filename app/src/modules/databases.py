@@ -279,7 +279,7 @@ class ConversationDB:
     async def add_files(self, data, user_id):
         try:
             # Prepare data for batch insertion
-            self.logger.info(f"Received data in add_files: {data}")
+        
             self.logger.info(f"User ID in add_files: {user_id}")
             values = [(item['filename'], item['url'], user_id)
                       for item in data]

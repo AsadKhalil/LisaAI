@@ -107,13 +107,16 @@ async def get_chatbot_response(query: Query):
         llm = await LLMAgentFactory().create()
         if type(llm) == str:
             return llm
+        
+        # Extract user_id early
+        user_id = int(query.userId) if getattr(query, "userId", None) not in (None, "") else None
+        
         await llm._build_prompt(query.language)
         await llm._create_agent()
 
         # if current_user.custom_claims.get('local_id') is not None:
         #     user_id = current_user.custom_claims.get('local_id')
         #     logger.info(f"Current user's local id: {user_id}")
-        user_id = 1
         conversation_id = None
 
         if not query.convo_id:  # Check if 'chat_history' is not present or empty
@@ -135,8 +138,14 @@ async def get_chatbot_response(query: Query):
                     }
                 )
 
+        # Add user_id to the query context so the LLM can use it
+        if user_id is not None:
+            query_with_user = f"User ID: {user_id}\n\nQuery: {query.input}"
+        else:
+            query_with_user = query.input
+
         # chatbot's response
-        response, context = await llm.qa(query.input, chat_history)
+        response, context = await llm.qa(query_with_user, chat_history)
         end_time = time.time()
         response_time = end_time - start_time
         conversation_id = json.dumps(str(conversation_id))
@@ -1336,7 +1345,95 @@ def init_mysql_connection():
         )
         logger.info("MySQL connection established at startup.")
 
-
+def extract_encounter_data(user_id):
+    """
+    Extract comprehensive encounter data for a user from database tables.
+    This function is called by the LLM when it understands the user wants encounter summaries.
+    The user_id IS the patient ID - there's no separate patient concept.
+    
+    Args:
+        user_id (int): The user ID (which is also the patient ID)
+        
+    Returns:
+        dict: Comprehensive user encounter data or None if error
+    """
+    try:
+        global mysql_connection
+        if mysql_connection is None or not mysql_connection.is_connected():
+            init_mysql_connection()
+        
+        connection = mysql_connection
+        cursor = connection.cursor(dictionary=True)
+        
+        # Extract patient encounters (filtered by user_id for security)
+        cursor.execute("""
+            SELECT id, patientId, encounterTypeCode, encounterTypeHistory, 
+                   startDate, endDate, assignedToId, billingTypeCode, 
+                   billingId, duration, additionalFields, soapForm, 
+                   selectedForms, signature, atDraft, isDeleted, isActive, 
+                   createdById, updatedById, deletedById, createdAt, 
+                   updatedAt, isLock, patientName
+            FROM patient_encounters 
+            WHERE patientId = %s AND isDeleted = 0 AND isActive = 1
+            ORDER BY createdAt DESC
+        """, (user_id,))
+        encounters = cursor.fetchall()
+        
+        # Extract allergies (filtered by user_id for security)
+        cursor.execute("""
+            SELECT allergy, severitiesCode, dateOfOnSet, patientEncounterId, 
+                   comment, isDeleted, isActive, allergiesStatus, allergytype, createdById
+            FROM allergies 
+            WHERE patientId = %s AND isDeleted = 0
+        """, (user_id,))
+        allergies = cursor.fetchall()
+        
+        # Extract recent vitals (last 5 records, filtered by user_id for security)
+        cursor.execute("""
+            SELECT recordDate, recordTime, weightKilo, weightGram, weightUnit,
+                   heightFt, heightIn, heightUnit, bmi, temperatureF, 
+                   systolicBloodPressure, diastolicBloodPressure, respiratoryRate,
+                   pulseBpm, bloodSugar, fasting, o2Saturation, createdById
+            FROM vitals 
+            WHERE patientId = %s AND isDeleted = 0 AND isActive = 1
+            ORDER BY createdAt DESC
+            LIMIT 5
+        """, (user_id,))
+        vitals = cursor.fetchall()
+        
+        # Extract current medications (filtered by user_id for security)
+        cursor.execute("""
+            SELECT medicationtype, drugname, drugbrandname, instruction, 
+                   quantity, refill, isallowsubstitution, prescriber, 
+                   prescriberid, doctor_id, startedon, isadministered, 
+                   reason, discontinuecomment, errorcomment, cancelrxcomment,
+                   dose, unit, route, frequency, duration, direction, comment, createdby
+            FROM patient_medications 
+            WHERE patient_id = %s AND isdeleted = 0 AND isactive = 1
+        """, (user_id,))
+        medications = cursor.fetchall()
+        
+        cursor.close()
+        
+        # Structure the comprehensive encounter data
+        encounter_data = {
+            "user_id": user_id,
+            "total_encounters": len(encounters),
+            "encounters": encounters,
+            "allergies": allergies,
+            "recent_vitals": vitals,
+            "current_medications": medications,
+            "data_extracted_at": datetime.now().isoformat()
+        }
+        
+        logger.info(f"Successfully extracted encounter data for patient {user_id}")
+        return encounter_data
+        
+    except Exception as e:
+        logger.error(f"Error extracting encounter data for patient {user_id}: {str(e)}")
+        logger.error(traceback.format_exc())
+        return None
+        
 def replace_underscores(obj):
     if isinstance(obj, dict):
         return {k: replace_underscores(v) for k, v in obj.items()}

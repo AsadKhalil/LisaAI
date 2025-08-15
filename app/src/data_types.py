@@ -26,6 +26,8 @@ class Query(BaseModel):
     chat_history: Optional[list] = None
     convo_id: Union[str, None]
     language: Optional[str] = None
+    current_page: Optional[str] = None
+    userId: Optional[str] = None
 
 
 class SmartSearchInput(BaseModel):

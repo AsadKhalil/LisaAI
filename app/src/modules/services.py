@@ -122,7 +122,16 @@ class OPENAIAgent(Agent):
             print(context)
             return context
 
-        tools = [semantic_search]
+        @tool
+        async def get_encounter_data(user_id: int):
+            """
+            Extract comprehensive encounter data for a patient. Use this when the user requests encounter summaries, 
+            medical record summaries, or patient encounter information.
+            """
+            from app.src.view import extract_encounter_data
+            return extract_encounter_data(user_id)
+
+        tools = [semantic_search, get_encounter_data]
 
         self.llm_with_tools = self.llm.bind_tools(tools)
 
@@ -209,14 +218,20 @@ class OPENAIAgent(Agent):
                 for step in response["intermediate_steps"]:
                     if isinstance(step[-1], str):
                         context = context + ";" + step[-1]
+                    elif isinstance(step[-1], dict) and len(step[-1]) > 1:
+                        # Handle case where step[-1] is a dict with multiple items
+                        context = context + ";" + str(step[-1])
                     else:
-                        context = context + ";" + step[-1][1]
+                        # Handle other cases safely
+                        context = context + ";" + str(step[-1])
 
                 return result, context
 
             return result, ""
-        except Exception:
+        except Exception as e:
             self.logger.exception(traceback.format_exc())
+            # Return a default response instead of None
+            return "I apologize, but I encountered an error processing your request. Please try again.", ""
 
 
 class BedrockAgent(Agent):
