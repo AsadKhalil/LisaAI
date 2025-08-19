@@ -1370,7 +1370,9 @@ def extract_encounter_data(user_id):
             FROM patients
             WHERE userId = %s
         """, (user_id,))
-        patient_id = cursor.fetchall()
+
+        result = cursor.fetchone()  # e.g. {'id': 95}
+        patient_id = result["id"]
         # Extract patient encounters (filtered by user_id for security)
         cursor.execute("""
             SELECT id, patientId, encounterTypeCode, encounterTypeHistory, 
