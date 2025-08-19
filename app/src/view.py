@@ -1352,7 +1352,7 @@ def extract_encounter_data(user_id):
     The user_id IS the patient ID - there's no separate patient concept.
     
     Args:
-        user_id (int): The user ID (which is also the patient ID)
+        user_id (int): The user ID is responsible for getting the 'id' of patient, which is then used as FK in other tables (which is also the patient ID)
         
     Returns:
         dict: Comprehensive user encounter data or None if error
@@ -1365,6 +1365,14 @@ def extract_encounter_data(user_id):
         connection = mysql_connection
         cursor = connection.cursor(dictionary=True)
         
+        cursor.execute("""
+            SELECT id
+            FROM patients
+            WHERE userId = %s
+        """, (user_id,))
+
+        result = cursor.fetchone()  # e.g. {'id': 95}
+        patient_id = result["id"]
         # Extract patient encounters (filtered by user_id for security)
         cursor.execute("""
             SELECT id, patientId, encounterTypeCode, encounterTypeHistory, 
@@ -1376,7 +1384,7 @@ def extract_encounter_data(user_id):
             FROM patient_encounters 
             WHERE patientId = %s AND isDeleted = 0 AND isActive = 1
             ORDER BY createdAt DESC
-        """, (user_id,))
+        """, (patient_id,))
         encounters = cursor.fetchall()
         
         # Extract allergies (filtered by user_id for security)
@@ -1385,7 +1393,7 @@ def extract_encounter_data(user_id):
                    comment, isDeleted, isActive, allergiesStatus, allergytype, createdById
             FROM allergies 
             WHERE patientId = %s AND isDeleted = 0
-        """, (user_id,))
+        """, (patient_id,))
         allergies = cursor.fetchall()
         
         # Extract recent vitals (last 5 records, filtered by user_id for security)
@@ -1398,7 +1406,7 @@ def extract_encounter_data(user_id):
             WHERE patientId = %s AND isDeleted = 0 AND isActive = 1
             ORDER BY createdAt DESC
             LIMIT 5
-        """, (user_id,))
+        """, (patient_id,))
         vitals = cursor.fetchall()
         
         # Extract current medications (filtered by user_id for security)
@@ -1410,7 +1418,7 @@ def extract_encounter_data(user_id):
                    dose, unit, route, frequency, duration, direction, comment, createdby
             FROM patient_medications 
             WHERE patient_id = %s AND isdeleted = 0 AND isactive = 1
-        """, (user_id,))
+        """, (patient_id,))
         medications = cursor.fetchall()
         
         cursor.close()
@@ -1418,6 +1426,7 @@ def extract_encounter_data(user_id):
         # Structure the comprehensive encounter data
         encounter_data = {
             "user_id": user_id,
+            "patient_id": patient_id,
             "total_encounters": len(encounters),
             "encounters": encounters,
             "allergies": allergies,
@@ -1426,11 +1435,11 @@ def extract_encounter_data(user_id):
             "data_extracted_at": datetime.now().isoformat()
         }
         
-        logger.info(f"Successfully extracted encounter data for patient {user_id}")
+        logger.info(f"Successfully extracted encounter data for patient with patient_id {patient_id}")
         return encounter_data
         
     except Exception as e:
-        logger.error(f"Error extracting encounter data for patient {user_id}: {str(e)}")
+        logger.error(f"Error extracting encounter data for patient with patient_id{patient_id}: {str(e)}")
         logger.error(traceback.format_exc())
         return None
         

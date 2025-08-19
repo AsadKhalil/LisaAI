@@ -192,7 +192,13 @@ class OPENAIAgent(Agent):
         if language == "en":
             self.prompt = PROMPT + "\n\n**CRITICAL INSTRUCTION**: From now on, respond only in English, regardless of previous conversation language. Do NOT respond in Spanish or any other language."
         else:
-            self.prompt = PROMPT + "\n\n**INSTRUCCIÓN CRÍTICA**: Debes responder en español. No respondas en inglés ni en ningún otro idioma."
+            # For Spanish, add specific instruction about encounter summaries
+            spanish_instruction = """
+**INSTRUCCIÓN CRÍTICA**: Debes responder en español. No respondas en inglés ni en ningún otro idioma.
+
+**IMPORTANTE PARA RESUMENES DE ENCUENTROS**: Cuando los usuarios soliciten resúmenes de encuentros médicos, información de encuentros del paciente, o resúmenes de registros médicos, DEBES usar la función get_encounter_data para obtener los datos del paciente y luego presentar la información en español. No ignores esta capacidad cuando se solicite en español.
+"""
+            self.prompt = PROMPT + spanish_instruction
         self.logger.info(f"[DEBUG] Prompt set in _build_prompt: {self.prompt}")
 
     async def qa(self, query, chat_history):
