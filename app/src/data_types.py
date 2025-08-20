@@ -27,7 +27,7 @@ class Query(BaseModel):
     convo_id: Union[str, None]
     language: Optional[str] = None
     current_page: Optional[str] = None
-    userId: Optional[str] = None
+    userId: Optional[str] = None  # Deprecated: Use authentication instead
 
 
 class SmartSearchInput(BaseModel):

@@ -6,7 +6,7 @@ import traceback
 from typing import Any, List
 import app.src.constants as constants
 from typing_extensions import Annotated
-from fastapi import Depends, Response, UploadFile, HTTPException, APIRouter, File, Form
+from fastapi import Depends, Response, UploadFile, HTTPException, APIRouter, File, Form, Request
 from fastapi.responses import HTMLResponse
 from fastapi.security import OAuth2PasswordBearer
 
@@ -96,20 +96,32 @@ async def get_home_page():
 
 
 @router.post("/generate", response_class=HTMLResponse)
-async def get_chatbot_response(query: Query):
+async def get_chatbot_response(query: Query, request: Request):
     """route definition for chatbot"""
     try:
         start_time = time.time()
         logger.info(f"User's query: {query.input}")
         logger.info(f"Language: {query.language}")
-        # user_id = current_user.uid
-        # user_role = current_user.custom_claims.get('role')
+        
+        # Get user ID from request header
+        user_id = request.headers.get("userId")
+        if user_id:
+            try:
+                user_id = int(user_id)
+                logger.info(f"Using user ID from header: {user_id}")
+            except ValueError:
+                raise HTTPException(status_code=400, detail="Invalid user ID in header")
+        else:
+            # Fallback to request body user ID if not in header
+            user_id = int(query.userId) if getattr(query, "userId", None) not in (None, "") else None
+            logger.warning(f"Using user ID from request body: {user_id} (consider using header)")
+        
+        if user_id is None:
+            raise HTTPException(status_code=401, detail="No valid user ID found")
+        
         llm = await LLMAgentFactory().create()
         if type(llm) == str:
             return llm
-        
-        # Extract user_id early
-        user_id = int(query.userId) if getattr(query, "userId", None) not in (None, "") else None
         
         await llm._build_prompt(query.language)
         
@@ -1372,6 +1384,9 @@ def extract_encounter_data(user_id):
         """, (user_id,))
 
         result = cursor.fetchone()  # e.g. {'id': 95}
+        if result is None:
+            return f"No patient record found for user ID {user_id}. Please ensure you have a valid patient account."
+        
         patient_id = result["id"]
         # Extract patient encounters (filtered by user_id for security)
         cursor.execute("""
@@ -1439,9 +1454,9 @@ def extract_encounter_data(user_id):
         return encounter_data
         
     except Exception as e:
-        logger.error(f"Error extracting encounter data for patient with patient_id{patient_id}: {str(e)}")
+        logger.error(f"Error extracting encounter data for user_id {user_id}: {str(e)}")
         logger.error(traceback.format_exc())
-        return None
+        return f"Error retrieving encounter data: {str(e)}"
         
 def replace_underscores(obj):
     if isinstance(obj, dict):
