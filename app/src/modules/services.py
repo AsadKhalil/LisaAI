@@ -131,18 +131,21 @@ class OPENAIAgent(Agent):
         @tool
         async def get_encounter_data():
             """
-            Extract comprehensive encounter data for a patient. Use this when the user requests encounter summaries, 
+            Extract comprehensive encounter data for the authenticated user. Use this when the user requests encounter summaries, 
             medical record summaries, or patient encounter information.
             
-            IMPORTANT: User ID cannot be extracted from the prompt text. The response will only be related to the 
-            user ID provided in the request parameters. Only use this function when the user is requesting their 
-            own medical data or encounter summaries.
+            This function automatically uses the user's ID from the request header to retrieve their own medical data.
+            No parameters are needed as the user ID is already set from the request header.
             """
             if self.user_id is None:
-                return "Error: No user ID available to retrieve encounter data."
+                self.logger.error("get_encounter_data called but no user_id is set")
+                return "Error: No user ID available from request header. Please ensure the userId header is set."
             
+            self.logger.info(f"Retrieving encounter data for user_id: {self.user_id}")
             from app.src.view import extract_encounter_data
-            return extract_encounter_data(self.user_id)
+            result = extract_encounter_data(self.user_id)
+            self.logger.info(f"Encounter data retrieval completed for user_id: {self.user_id}")
+            return result
 
         tools = [semantic_search, get_encounter_data]
 
