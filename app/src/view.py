@@ -168,6 +168,62 @@ async def get_chatbot_response(query: Query, request: Request):
                 from app.src.modules.scheduling import SchedulingService
                 service = scheduling_service if 'scheduling_service' in globals() else SchedulingService()
                 
+                def _format_summary_text(raw_summary):
+                    try:
+                        data = raw_summary
+                        if isinstance(raw_summary, str):
+                            try:
+                                data = json.loads(raw_summary)
+                            except Exception:
+                                data = raw_summary
+                        # Dict formatting with preferred key order
+                        if isinstance(data, dict):
+                            preferred_order = [
+                                ("appointmentTitle", "Title"),
+                                ("appointmentType", "Type"),
+                                ("appointmentDate", "Date"),
+                                ("appointmentTime", "Time"),
+                                ("appointmentDuration", "Duration"),
+                                ("appointmentLocation", "Location"),
+                                ("providerName", "Provider"),
+                                ("reason", "Reason"),
+                            ]
+                            lines = []
+                            added = set()
+                            for key, label in preferred_order:
+                                if key in data and data[key] not in (None, ""):
+                                    lines.append(f"- {label}: {data[key]}")
+                                    added.add(key)
+                            # Add any remaining fields
+                            for key, value in data.items():
+                                if key not in added and value not in (None, ""):
+                                    lines.append(f"- {key}: {value}")
+                            return ("Summary:\n" + "\n".join(lines)).strip()
+                        # List formatting
+                        if isinstance(data, list):
+                            lines = []
+                            for item in data:
+                                if isinstance(item, dict):
+                                    item_str = ", ".join([f"{k}: {v}" for k, v in item.items() if v not in (None, "")])
+                                    lines.append(f"- {item_str}")
+                                else:
+                                    lines.append(f"- {item}")
+                            return ("Summary:\n" + "\n".join(lines)).strip()
+                        # String fallback - tidy up
+                        text = str(raw_summary or "").strip()
+                        if not text:
+                            return "Summary:\n- No details available"
+                        cleaned_lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+                        beautified = []
+                        for ln in cleaned_lines:
+                            if ":" in ln and not ln.lstrip().startswith("-"):
+                                beautified.append(f"- {ln}")
+                            else:
+                                beautified.append(ln)
+                        return ("Summary:\n" + "\n".join(beautified)).strip()
+                    except Exception:
+                        return f"Summary:\n{raw_summary}"
+                
                 # Get current session (if any)
                 current = await service.get_current_session(user_id)
                 
@@ -236,14 +292,7 @@ async def get_chatbot_response(query: Query, request: Request):
                             }
                         logger.info(f"[generate->scheduling] Appointment confirmed sessionId={current.session_id}")
                         if response_payload.get("status") == "confirmed":
-                            appt = response_payload.get("appointment", {})
-                            response_text = (
-                                f"{response_payload.get('message', '')}\n\n"
-                                f"Date: {appt.get('date', '')}\n"
-                                f"Time: {appt.get('time', '')}\n"
-                                f"Reason: {appt.get('reason', '')}\n"
-                                f"Duration: {appt.get('duration', '')}"
-                            ).strip()
+                            response_text = "Booking done, thank you"
                         else:
                             response_text = f"{response_payload.get('message', '')}\n{response_payload.get('details', '')}".strip()
                         wrapped_response = {
@@ -275,9 +324,9 @@ async def get_chatbot_response(query: Query, request: Request):
                         "summary": summary,
                         "message": "All questions answered! Please review and confirm your appointment details. Reply 'confirm' to proceed or 'cancel' to abort."
                     }
-                    summary_text = response_payload.get("summary", "") or ""
+                    summary_text = _format_summary_text(response_payload.get("summary", ""))
                     response_text = (
-                        f"{response_payload.get('message', '')}\n\nSummary:\n{summary_text}"
+                        f"{response_payload.get('message', '')}\n\n{summary_text}"
                     ).strip()
                     wrapped_response = {
                         "response": response_text,
@@ -297,9 +346,9 @@ async def get_chatbot_response(query: Query, request: Request):
                         "message": "All questions answered! Please review and confirm your appointment details. Reply 'confirm' to proceed or 'cancel' to abort."
                     }
                     logger.warning(f"[generate->scheduling] Missing next_question; treating as ready_for_confirmation sessionId={current.session_id}")
-                    summary_text = response_payload.get("summary", "") or ""
+                    summary_text = _format_summary_text(response_payload.get("summary", ""))
                     response_text = (
-                        f"{response_payload.get('message', '')}\n\nSummary:\n{summary_text}"
+                        f"{response_payload.get('message', '')}\n\n{summary_text}"
                     ).strip()
                     wrapped_response = {
                         "response": response_text,
@@ -354,9 +403,9 @@ async def get_chatbot_response(query: Query, request: Request):
                         "message": "All questions answered! Please review and confirm your appointment details. Reply 'confirm' to proceed or 'cancel' to abort."
                     }
                     logger.info(f"[generate->scheduling] Reached confirmation sessionId={current.session_id}")
-                    summary_text = response_payload.get("summary", "") or ""
+                    summary_text = _format_summary_text(response_payload.get("summary", ""))
                     response_text = (
-                        f"{response_payload.get('message', '')}\n\nSummary:\n{summary_text}"
+                        f"{response_payload.get('message', '')}\n\n{summary_text}"
                     ).strip()
                     wrapped_response = {
                         "response": response_text,
