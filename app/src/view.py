@@ -178,6 +178,47 @@ async def get_chatbot_response(query: Query, request: Request):
                                 data = raw_summary
                         # Dict formatting with preferred key order
                         if isinstance(data, dict):
+                            # Expand nested answers if present
+                            if isinstance(data.get("answers"), dict):
+                                answers = data.get("answers", {})
+                                key_label_map = {
+                                    "appointment_title": "Title",
+                                    "appointment_type": "Type",
+                                    "consultant_type": "Consultant Type",
+                                    "appointment_location": "Location",
+                                    "practitioner_selection": "Provider",
+                                    "time_selection": "Time",
+                                }
+                                ordered_keys = [
+                                    "appointment_title",
+                                    "appointment_type",
+                                    "consultant_type",
+                                    "appointment_location",
+                                    "practitioner_selection",
+                                    "time_selection",
+                                ]
+                                lines = []
+                                for k in ordered_keys:
+                                    if k in answers and answers[k] not in (None, ""):
+                                        label = key_label_map.get(k, k)
+                                        lines.append(f"- {label}: {answers[k]}")
+                                # Append extra known top-level fields if present
+                                for top_key, label in [
+                                    ("appointmentTitle", "Title"),
+                                    ("appointmentType", "Type"),
+                                    ("appointmentDate", "Date"),
+                                    ("appointmentTime", "Time"),
+                                    ("appointmentDuration", "Duration"),
+                                    ("appointmentLocation", "Location"),
+                                    ("providerName", "Provider"),
+                                    ("reason", "Reason"),
+                                ]:
+                                    if data.get(top_key) not in (None, ""):
+                                        lines.append(f"- {label}: {data[top_key]}")
+                                # If summary_text provided, add it at end
+                                if data.get("summary_text"):
+                                    lines.append(f"- Notes: {data['summary_text']}")
+                                return ("Summary:\n" + "\n".join(lines)).strip()
                             preferred_order = [
                                 ("appointmentTitle", "Title"),
                                 ("appointmentType", "Type"),
@@ -196,6 +237,8 @@ async def get_chatbot_response(query: Query, request: Request):
                                     added.add(key)
                             # Add any remaining fields
                             for key, value in data.items():
+                                if key in ("session_id", "answers"):
+                                    continue
                                 if key not in added and value not in (None, ""):
                                     lines.append(f"- {key}: {value}")
                             return ("Summary:\n" + "\n".join(lines)).strip()
