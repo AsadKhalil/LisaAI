@@ -8,6 +8,7 @@ import yaml
 from app.src import constants
 from langchain_openai import OpenAIEmbeddings
 from app.src.modules.auth import Authentication
+import mysql.connector
 
 logger = logging.getLogger("databases")
 
@@ -269,12 +270,49 @@ class ConversationDB:
                     active boolean DEFAULT true
                 );
                 ''')
+            
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS appointments (
+                    id uuid DEFAULT gen_random_uuid() PRIMARY KEY,
+                    user_id text NOT NULL,
+                    user_name text NOT NULL,
+                    appointment_date date NOT NULL,
+                    appointment_time text NOT NULL,
+                    reason text NOT NULL,
+                    duration_minutes integer DEFAULT 30,
+                    notes text,
+                    status text DEFAULT 'scheduled',
+                    created_at timestamp DEFAULT current_timestamp,
+                    updated_at timestamp DEFAULT current_timestamp
+                );
+                ''')
 
             conn.commit()
             cursor.close()
             conn.close()
         except psycopg.Error as err:
             self.logger.exception(err)
+
+    def _get_mysql_connection(self):
+        """Return a live MySQL connection using env vars, reconnecting if needed."""
+        try:
+            host = os.environ.get("MYSQL_HOST")
+            user = os.environ.get("MYSQL_USERNAME")
+            password = os.environ.get("MYSQL_PASSWORD")
+            database = os.environ.get("MYSQL_DATABASE")
+
+            if not hasattr(self, "_mysql_connection") or self._mysql_connection is None or not self._mysql_connection.is_connected():
+                self._mysql_connection = mysql.connector.connect(
+                    host=host,
+                    user=user,
+                    password=password,
+                    database=database,
+                )
+                self.logger.info("MySQL connection (EHR) established in ConversationDB")
+            return self._mysql_connection
+        except Exception as e:
+            self.logger.exception(f"Failed to create MySQL connection: {e}")
+            raise HTTPException(status_code=500, detail="Failed to connect to MySQL for appointments")
 
     async def add_files(self, data, user_id):
         try:
@@ -925,5 +963,174 @@ class ConversationDB:
             file_names = [row[0] for row in rows if row[0] is not None]
             return file_names
         except psycopg.Error as err:
+            self.logger.exception(err)
+            raise err
+
+    async def create_appointment(self, user_id: str, user_name: str, appointment_date: str, 
+                                appointment_time: str, reason: str, duration_minutes: int, 
+                                notes: str = None, status: str = "scheduled"):
+        """Create a new appointment in the MySQL EHR appointments table.
+        Maps app user_id to patients.id via patients.userId -> patientId FK.
+        Inserts camelCase columns expected by EHR.
+        """
+        try:
+            mysql_conn = self._get_mysql_connection()
+            cursor = mysql_conn.cursor()
+
+            # Resolve patientId from patients.userId
+            cursor.execute("""
+                SELECT id FROM patients WHERE userId = %s
+            """, (user_id,))
+            row = cursor.fetchone()
+            if not row:
+                raise HTTPException(status_code=404, detail=f"No patient found for userId {user_id}")
+            patient_id = row[0]
+
+            # Insert into appointments (camelCase columns)
+            cursor.execute('''
+                INSERT INTO `appointments` (
+                    `appointmentTitle`,
+                    `appointmentType`,
+                    `patientId`,
+                    `appointmentLocation`,
+                    `providerId`,
+                    `providerName`,
+                    `statusCode`,
+                    `appointmentDate`,
+                    `appointmentTime`,
+                    `appointmentDuration`,
+                    `reason`,
+                    `isRecurring`,
+                    `typeCode`,
+                    `isDeleted`,
+                    `isActive`,
+                    `createdById`,
+                    `updatedById`,
+                    `deletedById`,
+                    `createdAt`,
+                    `updatedAt`,
+                    `startDateTime`,
+                    `endDateTime`,
+                    `recurringSettingId`,
+                    `appointmentDate_utc`,
+                    `startDateTime_utc`,
+                    `endDateTime_utc`,
+                    `appointmentMode`,
+                    `consultantType`
+                ) VALUES (
+                    %s, %s, %s, %s, %s, %s, %s,
+                    %s, %s, %s, %s,
+                    %s, %s, %s, %s,
+                    %s, %s, %s,
+                    NOW(), NOW(),
+                    %s, %s,
+                    %s, %s, %s,
+                    %s, %s
+                )
+            ''', (
+                # Minimal mapping from scheduling flow; many optional fields defaulted
+                "Appointment",                 # appointmentTitle
+                "Consultation",               # appointmentType
+                patient_id,                    # patientId
+                None,                          # appointmentLocation
+                None,                          # providerId
+                None,                          # providerName
+                status,                        # statusCode
+                appointment_date,              # appointmentDate
+                appointment_time,              # appointmentTime
+                duration_minutes,              # appointmentDuration
+                reason,                        # reason
+                0,                             # isRecurring
+                None,                          # typeCode
+                0,                             # isDeleted
+                1,                             # isActive
+                user_id,                       # createdById
+                user_id,                       # updatedById
+                None,                          # deletedById
+                # createdAt NOW() in query
+                # updatedAt NOW() in query
+                None,                          # startDateTime
+                None,                          # endDateTime
+                None,                          # recurringSettingId
+                None,                          # appointmentDate_utc
+                None,                          # startDateTime_utc
+                None,                          # endDateTime_utc
+                "in_person",                  # appointmentMode
+                None                           # consultantType
+            ))
+
+            mysql_conn.commit()
+            appointment_id = cursor.lastrowid
+            cursor.close()
+            self.logger.info(f"Created appointment {appointment_id} for user {user_id} (patientId {patient_id})")
+            return appointment_id
+        except Exception as err:
+            self.logger.exception(err)
+            raise err
+
+    async def get_user_appointments(self, user_id: str):
+        """Get all appointments for a specific user from MySQL EHR DB"""
+        try:
+            mysql_conn = self._get_mysql_connection()
+            cursor = mysql_conn.cursor()
+            cursor.execute('''
+            SELECT 
+                `id`,
+                `appointmentTitle`,
+                `appointmentType`,
+                `patientId`,
+                `appointmentLocation`,
+                `providerId`,
+                `providerName`,
+                `statusCode`,
+                `appointmentDate`,
+                `appointmentTime`,
+                `appointmentDuration`,
+                `reason`,
+                `isRecurring`,
+                `typeCode`,
+                `isDeleted`,
+                `isActive`,
+                `createdById`,
+                `updatedById`,
+                `deletedById`,
+                `createdAt`,
+                `updatedAt`,
+                `startDateTime`,
+                `endDateTime`,
+                `recurringSettingId`,
+                `appointmentDate_utc`,
+                `startDateTime_utc`,
+                `endDateTime_utc`,
+                `appointmentMode`,
+                `consultantType`
+            FROM `appointments`
+            WHERE `patientId` = %s
+            ORDER BY `appointmentDate` DESC, `appointmentTime` DESC
+            ''', (user_id,))
+
+            rows = cursor.fetchall()
+            cursor.close()
+            return rows
+        except Exception as err:
+            self.logger.exception(err)
+            raise err
+
+    async def update_appointment_status(self, appointment_id: str, status: str):
+        """Update the statusCode of an appointment in MySQL EHR DB"""
+        try:
+            mysql_conn = self._get_mysql_connection()
+            cursor = mysql_conn.cursor()
+            cursor.execute('''
+                UPDATE `appointments`
+                SET `statusCode` = %s, `updatedAt` = NOW()
+                WHERE `id` = %s
+            ''', (status, appointment_id))
+
+            mysql_conn.commit()
+            cursor.close()
+            self.logger.info(f"Updated appointment {appointment_id} statusCode to {status}")
+            return True
+        except Exception as err:
             self.logger.exception(err)
             raise err
