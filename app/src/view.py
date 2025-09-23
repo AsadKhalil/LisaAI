@@ -184,8 +184,17 @@ async def get_chatbot_response(query: Query, request: Request):
                         "message": "Scheduling session started. Please answer the following question:"
                     }
                     logger.info(f"[generate->scheduling] Responding with first question sessionId={current.session_id}")
+                    response_text_parts = [
+                        response_payload.get("message", ""),
+                        f"Question: {response_payload.get('current_question', '')}",
+                    ]
+                    if response_payload.get("options"):
+                        options_list = response_payload.get("options") or []
+                        options_block = "\n".join([f"- {opt}" for opt in options_list])
+                        response_text_parts.append("Options:\n" + options_block)
+                    response_text = "\n\n".join([p for p in response_text_parts if p])
                     wrapped_response = {
-                        "response": response_payload,
+                        "response": response_text,
                         "query_id": "",
                         "convo_id": query.convo_id or "",
                     }
@@ -226,8 +235,19 @@ async def get_chatbot_response(query: Query, request: Request):
                                 "summary": appointment_summary
                             }
                         logger.info(f"[generate->scheduling] Appointment confirmed sessionId={current.session_id}")
+                        if response_payload.get("status") == "confirmed":
+                            appt = response_payload.get("appointment", {})
+                            response_text = (
+                                f"{response_payload.get('message', '')}\n\n"
+                                f"Date: {appt.get('date', '')}\n"
+                                f"Time: {appt.get('time', '')}\n"
+                                f"Reason: {appt.get('reason', '')}\n"
+                                f"Duration: {appt.get('duration', '')}"
+                            ).strip()
+                        else:
+                            response_text = f"{response_payload.get('message', '')}\n{response_payload.get('details', '')}".strip()
                         wrapped_response = {
-                            "response": response_payload,
+                            "response": response_text,
                             "query_id": "",
                             "convo_id": query.convo_id or "",
                         }
@@ -241,7 +261,7 @@ async def get_chatbot_response(query: Query, request: Request):
                         }
                         logger.info(f"[generate->scheduling] Appointment cancelled sessionId={current.session_id}")
                         wrapped_response = {
-                            "response": response_payload,
+                            "response": response_payload.get("message", "Appointment scheduling cancelled."),
                             "query_id": "",
                             "convo_id": query.convo_id or "",
                         }
@@ -255,8 +275,12 @@ async def get_chatbot_response(query: Query, request: Request):
                         "summary": summary,
                         "message": "All questions answered! Please review and confirm your appointment details. Reply 'confirm' to proceed or 'cancel' to abort."
                     }
+                    summary_text = response_payload.get("summary", "") or ""
+                    response_text = (
+                        f"{response_payload.get('message', '')}\n\nSummary:\n{summary_text}"
+                    ).strip()
                     wrapped_response = {
-                        "response": response_payload,
+                        "response": response_text,
                         "query_id": "",
                         "convo_id": query.convo_id or "",
                     }
@@ -273,8 +297,12 @@ async def get_chatbot_response(query: Query, request: Request):
                         "message": "All questions answered! Please review and confirm your appointment details. Reply 'confirm' to proceed or 'cancel' to abort."
                     }
                     logger.warning(f"[generate->scheduling] Missing next_question; treating as ready_for_confirmation sessionId={current.session_id}")
+                    summary_text = response_payload.get("summary", "") or ""
+                    response_text = (
+                        f"{response_payload.get('message', '')}\n\nSummary:\n{summary_text}"
+                    ).strip()
                     wrapped_response = {
-                        "response": response_payload,
+                        "response": response_text,
                         "query_id": "",
                         "convo_id": query.convo_id or "",
                     }
@@ -297,8 +325,17 @@ async def get_chatbot_response(query: Query, request: Request):
                             "message": "Please choose one of the options exactly as shown."
                         }
                         logger.info(f"[generate->scheduling] Invalid option provided for step {step_id}")
+                        response_text_parts = [
+                            response_payload.get("message", ""),
+                            f"Question: {response_payload.get('current_question', '')}",
+                        ]
+                        if response_payload.get("options"):
+                            options_list = response_payload.get("options") or []
+                            options_block = "\n".join([f"- {opt}" for opt in options_list])
+                            response_text_parts.append("Options:\n" + options_block)
+                        response_text = "\n\n".join([p for p in response_text_parts if p])
                         wrapped_response = {
-                            "response": response_payload,
+                            "response": response_text,
                             "query_id": "",
                             "convo_id": query.convo_id or "",
                         }
@@ -317,8 +354,12 @@ async def get_chatbot_response(query: Query, request: Request):
                         "message": "All questions answered! Please review and confirm your appointment details. Reply 'confirm' to proceed or 'cancel' to abort."
                     }
                     logger.info(f"[generate->scheduling] Reached confirmation sessionId={current.session_id}")
+                    summary_text = response_payload.get("summary", "") or ""
+                    response_text = (
+                        f"{response_payload.get('message', '')}\n\nSummary:\n{summary_text}"
+                    ).strip()
                     wrapped_response = {
-                        "response": response_payload,
+                        "response": response_text,
                         "query_id": "",
                         "convo_id": query.convo_id or "",
                     }
@@ -333,8 +374,17 @@ async def get_chatbot_response(query: Query, request: Request):
                         "message": "Thank you! Here's the next question:"
                     }
                     logger.info(f"[generate->scheduling] Next question sessionId={current.session_id}")
+                    response_text_parts = [
+                        response_payload.get("message", ""),
+                        f"Question: {response_payload.get('current_question', '')}",
+                    ]
+                    if response_payload.get("options"):
+                        options_list = response_payload.get("options") or []
+                        options_block = "\n".join([f"- {opt}" for opt in options_list])
+                        response_text_parts.append("Options:\n" + options_block)
+                    response_text = "\n\n".join([p for p in response_text_parts if p])
                     wrapped_response = {
-                        "response": response_payload,
+                        "response": response_text,
                         "query_id": "",
                         "convo_id": query.convo_id or "",
                     }
