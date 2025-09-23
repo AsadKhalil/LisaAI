@@ -22,6 +22,7 @@ from app.src.data_types import (
     DeleteFile,
     ActiveFile,
     TreatmentPlanRequest,
+    SchedulingCancelRequest,
 )
 from .modules.databases import ConversationDB
 from .modules.services import LLMAgentFactory, simple_openai_chat
@@ -44,6 +45,7 @@ from io import BytesIO
 from jinja2 import Template, Environment
 import random
 import string
+import uuid
 
 oauth2scheme = OAuth2PasswordBearer(
     tokenUrl="token",
@@ -132,6 +134,216 @@ async def get_chatbot_response(query: Query, request: Request):
         
         await llm._create_agent()
 
+        # Scheduling intent detection and auto-start/continue flow
+        try:
+            lower_q = query.input
+            
+            # Get chat history for context
+            chat_history_context = ""
+            if query.chat_history and len(query.chat_history) > 0:
+                chat_history_context = "\n\nPrevious conversation context:\n"
+                for i, msg in enumerate(query.chat_history[-5:]):  # Last 5 messages for context
+                    chat_history_context += f"User: {msg.get('prompt', '')}\n"
+                    chat_history_context += f"Assistant: {msg.get('response', '')}\n"
+            
+            # Enhanced intent classification prompt with detailed procedure
+            logger.info(f"chat_history_context: {chat_history_context}")
+            intent_prompt = (
+                "You are an intent classifier. Determine if the user's message is about scheduling an appointment. Check the history aswell."
+                "Return only one word, exactly 'true' or 'false' (lowercase, no punctuation, no explanation).\n\n"
+                "if the history has questions like whats the appointment title, appointment type etc, anything that shows the conversation has scheduling content but did not complete and the user's now input is related to the last question, return true"
+                "if the user is asking for summarisation of encounters, or asking anything, return false, because then the user is querying the chatbot"
+                f"User message: {lower_q}\n\n"
+                f"Previous conversation context: {chat_history_context}"
+            )
+            llm_intent_raw = await simple_openai_chat(intent_prompt)
+            llm_intent_text = (llm_intent_raw or "").strip().lower()
+            logger.info(f"llm_intent_text: {llm_intent_text}")
+            # Robust parse: accept 'true' if it appears as a standalone token; otherwise false
+            is_scheduling = bool(re.search(r"\btrue\b", llm_intent_text)) and not bool(re.search(r"\bfalse\b", llm_intent_text))
+            logger.info(f"is_scheduling: {is_scheduling}")
+            
+            if is_scheduling:
+                logger.info("[generate->scheduling] Scheduling intent detected; handling via scheduling service")
+                from app.src.modules.scheduling import SchedulingService
+                service = scheduling_service if 'scheduling_service' in globals() else SchedulingService()
+                
+                # Get current session (if any)
+                current = await service.get_current_session(user_id)
+                
+                if not current:
+                    # No active session - start new one
+                    logger.info("[generate->scheduling] No active session; starting new session")
+                    current = await service.start_scheduling_session(user_id)
+                    response_payload = {
+                        "status": "next_question",
+                        "session_id": current.session_id,
+                        "current_question": current.next_question.question,
+                        "step_type": current.next_question.step_type,
+                        "options": current.next_question.options,
+                        "message": "Scheduling session started. Please answer the following question:"
+                    }
+                    logger.info(f"[generate->scheduling] Responding with first question sessionId={current.session_id}")
+                    wrapped_response = {
+                        "response": response_payload,
+                        "query_id": "",
+                        "convo_id": query.convo_id or "",
+                    }
+                    return json.dumps(wrapped_response)
+                
+                # Active session exists - handle based on status
+                if current.status == "ready_for_confirmation":
+                    # Handle confirmation intent
+                    logger.info(f"[generate->scheduling] Session ready for confirmation sessionId={current.session_id}")
+                    confirm_keywords = ["confirm", "yes", "book it", "looks good", "proceed", "schedule"]
+                    cancel_keywords = ["cancel", "stop", "discard", "abort", "no"]
+                    
+                    if any(k in lower_q for k in confirm_keywords):
+                        appointment_result = await service.confirm_appointment(user_id, current.session_id)
+                        appointment_payload = appointment_result["payload"]
+                        appointment_summary = appointment_result["summary"]
+                        db_result = appointment_result["db_result"]
+                        
+                        if db_result["success"]:
+                            response_payload = {
+                                "status": "confirmed",
+                                "appointment": {
+                                    "id": str(db_result.get("appointment_id", uuid.uuid4())),
+                                    "date": appointment_payload["appointmentDate"],
+                                    "time": appointment_payload["appointmentTime"],
+                                    "reason": appointment_payload.get("reason", ""),
+                                    "duration": appointment_payload.get("appointmentDuration", ""),
+                                    "notes": appointment_payload.get("reason", "")
+                                },
+                                "message": "Appointment scheduled successfully!",
+                                "summary": appointment_summary
+                            }
+                        else:
+                            response_payload = {
+                                "status": "failed",
+                                "message": f"Failed to schedule appointment: {db_result.get('error', 'Unknown error')}",
+                                "details": db_result.get("message", ""),
+                                "summary": appointment_summary
+                            }
+                        logger.info(f"[generate->scheduling] Appointment confirmed sessionId={current.session_id}")
+                        wrapped_response = {
+                            "response": response_payload,
+                            "query_id": "",
+                            "convo_id": query.convo_id or "",
+                        }
+                        return json.dumps(wrapped_response)
+                    
+                    if any(k in lower_q for k in cancel_keywords):
+                        await service.cancel_session(user_id, current.session_id)
+                        response_payload = {
+                            "status": "cancelled",
+                            "message": "Appointment scheduling cancelled."
+                        }
+                        logger.info(f"[generate->scheduling] Appointment cancelled sessionId={current.session_id}")
+                        wrapped_response = {
+                            "response": response_payload,
+                            "query_id": "",
+                            "convo_id": query.convo_id or "",
+                        }
+                        return json.dumps(wrapped_response)
+                    
+                    # Show summary again
+                    summary = await service.get_session_summary(user_id, current.session_id)
+                    response_payload = {
+                        "status": "ready_for_confirmation",
+                        "session_id": current.session_id,
+                        "summary": summary,
+                        "message": "All questions answered! Please review and confirm your appointment details. Reply 'confirm' to proceed or 'cancel' to abort."
+                    }
+                    wrapped_response = {
+                        "response": response_payload,
+                        "query_id": "",
+                        "convo_id": query.convo_id or "",
+                    }
+                    return json.dumps(wrapped_response)
+                
+                # Active session with pending questions - submit answer
+                if current.next_question is None:
+                    # Defensive: session says active but no next_question; send summary prompt
+                    summary = await service.get_session_summary(user_id, current.session_id)
+                    response_payload = {
+                        "status": "ready_for_confirmation",
+                        "session_id": current.session_id,
+                        "summary": summary,
+                        "message": "All questions answered! Please review and confirm your appointment details. Reply 'confirm' to proceed or 'cancel' to abort."
+                    }
+                    logger.warning(f"[generate->scheduling] Missing next_question; treating as ready_for_confirmation sessionId={current.session_id}")
+                    wrapped_response = {
+                        "response": response_payload,
+                        "query_id": "",
+                        "convo_id": query.convo_id or "",
+                    }
+                    return json.dumps(wrapped_response)
+
+                # Submit answer to current question
+                step_id = current.next_question.step_id
+                answer_text = query.input
+                
+                # Validate multiple choice answers
+                if getattr(current, "options", None):
+                    options = current.options or []
+                    if answer_text not in options:
+                        response_payload = {
+                            "status": "validation_error",
+                            "session_id": current.session_id,
+                            "current_question": current.next_question.question,
+                            "step_type": current.next_question.step_type,
+                            "options": options,
+                            "message": "Please choose one of the options exactly as shown."
+                        }
+                        logger.info(f"[generate->scheduling] Invalid option provided for step {step_id}")
+                        wrapped_response = {
+                            "response": response_payload,
+                            "query_id": "",
+                            "convo_id": query.convo_id or "",
+                        }
+                        return json.dumps(wrapped_response)
+
+                # Submit answer
+                logger.info(f"[generate->scheduling] Submitting answer for sessionId={current.session_id} stepId={step_id}")
+                updated = await service.submit_answer(user_id, current.session_id, step_id, answer_text)
+                
+                if updated.status == "ready_for_confirmation":
+                    summary = await service.get_session_summary(user_id, current.session_id)
+                    response_payload = {
+                        "status": "ready_for_confirmation",
+                        "session_id": current.session_id,
+                        "summary": summary,
+                        "message": "All questions answered! Please review and confirm your appointment details. Reply 'confirm' to proceed or 'cancel' to abort."
+                    }
+                    logger.info(f"[generate->scheduling] Reached confirmation sessionId={current.session_id}")
+                    wrapped_response = {
+                        "response": response_payload,
+                        "query_id": "",
+                        "convo_id": query.convo_id or "",
+                    }
+                    return json.dumps(wrapped_response)
+                else:
+                    response_payload = {
+                        "status": "next_question",
+                        "session_id": current.session_id,
+                        "current_question": updated.next_question.question if updated.next_question else None,
+                        "step_type": updated.next_question.step_type if updated.next_question else None,
+                        "options": updated.next_question.options if updated.next_question else None,
+                        "message": "Thank you! Here's the next question:"
+                    }
+                    logger.info(f"[generate->scheduling] Next question sessionId={current.session_id}")
+                    wrapped_response = {
+                        "response": response_payload,
+                        "query_id": "",
+                        "convo_id": query.convo_id or "",
+                    }
+                    return json.dumps(wrapped_response)
+                    
+        except Exception as schedule_e:
+            logger.error(f"[generate->scheduling] Error handling scheduling intent: {str(schedule_e)}")
+            # Fall through to normal chat on error
+
         # if current_user.custom_claims.get('local_id') is not None:
         #     user_id = current_user.custom_claims.get('local_id')
         #     logger.info(f"Current user's local id: {user_id}")
@@ -184,6 +396,59 @@ async def get_chatbot_response(query: Query, request: Request):
     except Exception as e:
         print(traceback.format_exc())
         print(sys.exc_info()[2])
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.get("/appointments/{user_id}")
+async def get_user_appointments(user_id: int):
+    """Get all appointments for a specific user"""
+    try:
+        from app.src.modules.databases import ConversationDB
+        db = ConversationDB()
+        appointments = await db.get_user_appointments(str(user_id))
+        
+        formatted_appointments = []
+        for appointment in appointments:
+            formatted_appointments.append({
+                "id": appointment[0],
+                "appointmentTitle": appointment[1],
+                "appointmentType": appointment[2],
+                "patientId": appointment[3],
+                "appointmentLocation": appointment[4],
+                "providerId": appointment[5],
+                "providerName": appointment[6],
+                "statusCode": appointment[7],
+                "appointmentDate": appointment[8].isoformat() if appointment[8] else None,
+                "appointmentTime": appointment[9],
+                "appointmentDuration": appointment[10],
+                "reason": appointment[11],
+                "isRecurring": appointment[12],
+                "typeCode": appointment[13],
+                "isDeleted": appointment[14],
+                "isActive": appointment[15],
+                "createdById": appointment[16],
+                "updatedById": appointment[17],
+                "deletedById": appointment[18],
+                "createdAt": appointment[19].isoformat() if appointment[19] else None,
+                "updatedAt": appointment[20].isoformat() if appointment[20] else None,
+                "startDateTime": appointment[21].isoformat() if appointment[21] else None,
+                "endDateTime": appointment[22].isoformat() if appointment[22] else None,
+                "recurringSettingId": appointment[23],
+                "appointmentDate_utc": appointment[24].isoformat() if appointment[24] else None,
+                "startDateTime_utc": appointment[25].isoformat() if appointment[25] else None,
+                "endDateTime_utc": appointment[26].isoformat() if appointment[26] else None,
+                "appointmentMode": appointment[27],
+                "consultantType": appointment[28]
+            })
+        
+        return {
+            "user_id": user_id,
+            "appointments": formatted_appointments,
+            "total": len(formatted_appointments)
+        }
+        
+    except Exception as e:
+        logger.error(f"Error getting appointments for user {user_id}: {str(e)}")
+        logger.error(traceback.format_exc())
         raise HTTPException(status_code=500, detail=str(e)) from e
 
 
@@ -1523,3 +1788,292 @@ def latex_to_pdf(latex_content: str) -> bytes:
 
 # Initialize MySQL connection at app startup
 init_mysql_connection()
+
+# Import scheduling service
+from app.src.modules.scheduling import SchedulingService
+
+# Initialize scheduling service
+scheduling_service = SchedulingService()
+
+# Scheduling endpoints
+@router.post("/schedule/start")
+async def start_scheduling_session(request: Request):
+    """Start a new scheduling session"""
+    try:
+        # Get user ID and name from request headers
+        logger.info("[schedule/start] Request received")
+        user_id = request.headers.get("userId")
+        user_name = request.headers.get("userName", "User")
+        logger.info(f"[schedule/start] Headers userId={user_id}")
+        
+        if not user_id:
+            raise HTTPException(status_code=400, detail="userId header is required")
+        
+        try:
+            user_id = int(user_id)
+            logger.info(f"[schedule/start] Parsed userId={user_id}")
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid user ID format")
+        
+        # Start scheduling session
+        logger.info(f"[schedule/start] Starting session for userId={user_id}")
+        session = await scheduling_service.start_scheduling_session(user_id)
+        logger.info(
+            f"[schedule/start] Session started sessionId={session.session_id} nextStep={getattr(session.next_question, 'step_type', None)}"
+        )
+        
+        response_payload = {
+            "session_id": session.session_id,
+            "current_question": session.next_question.question,
+            "step_type": session.next_question.step_type,
+            "options": session.next_question.options,
+            "message": "Scheduling session started. Please answer the following question:"
+        }
+        logger.info(
+            f"[schedule/start] Responding sessionId={response_payload['session_id']} stepType={response_payload['step_type']}"
+        )
+        return response_payload
+        
+    except Exception as e:
+        logger.error(f"Error starting scheduling session: {str(e)}")
+        logger.error(traceback.format_exc())
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.post("/schedule/answer")
+async def submit_scheduling_answer(request: Request):
+    """Submit an answer to the current scheduling question"""
+    try:
+        # Get user ID from request headers
+        logger.info("[schedule/answer] Request received")
+        user_id = request.headers.get("userId")
+        logger.info(f"[schedule/answer] Headers userId={user_id}")
+        if not user_id:
+            raise HTTPException(status_code=400, detail="userId header is required")
+        
+        try:
+            user_id = int(user_id)
+            logger.info(f"[schedule/answer] Parsed userId={user_id}")
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid user ID format")
+        
+        # Get request body
+        body = await request.json()
+        session_id = body.get("session_id")
+        step_id = body.get("step_id")
+        answer = body.get("answer")
+        logger.info(
+            f"[schedule/answer] Body sessionId={session_id} stepId={step_id} answerType={type(answer).__name__}"
+        )
+        
+        if not all([session_id, step_id, answer]):
+            raise HTTPException(status_code=400, detail="session_id, step_id, and answer are required")
+        
+        # Submit answer
+        logger.info(f"[schedule/answer] Submitting answer for sessionId={session_id} stepId={step_id}")
+        session = await scheduling_service.submit_answer(user_id, session_id, step_id, answer)
+        logger.info(
+            f"[schedule/answer] Updated session status={session.status} nextStep={(session.next_question.step_type if session.next_question else None)}"
+        )
+        
+        if session.status == "ready_for_confirmation":
+            # Get summary for confirmation
+            logger.info(f"[schedule/answer] Session ready for confirmation sessionId={session_id}")
+            summary = await scheduling_service.get_session_summary(user_id, session_id)
+            response_payload = {
+                "status": "ready_for_confirmation",
+                "session_id": session_id,
+                "summary": summary,
+                "message": "All questions answered! Please review and confirm your appointment details."
+            }
+            logger.info(f"[schedule/answer] Responding with confirmation-ready sessionId={session_id}")
+            return response_payload
+        else:
+            # Return next question
+            response_payload = {
+                "status": "next_question",
+                "session_id": session_id,
+                "current_question": session.next_question.question,
+                "step_type": session.next_question.step_type,
+                "options": session.next_question.options,
+                "message": "Thank you! Here's the next question:"
+            }
+            logger.info(
+                f"[schedule/answer] Responding next question sessionId={session_id} stepType={response_payload['step_type']}"
+            )
+            return response_payload
+        
+    except Exception as e:
+        logger.error(f"Error submitting scheduling answer: {str(e)}")
+        logger.error(traceback.format_exc())
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.post("/schedule/confirm")
+async def confirm_appointment(request: Request):
+    """Confirm and create the appointment"""
+    try:
+        # Get user ID and name from request headers
+        logger.info("[schedule/confirm] Request received")
+        user_id = request.headers.get("userId")
+        user_name = request.headers.get("userName", "User")
+        logger.info(f"[schedule/confirm] Headers userId={user_id} userName={user_name}")
+        
+        if not user_id:
+            raise HTTPException(status_code=400, detail="userId header is required")
+        
+        try:
+            user_id = int(user_id)
+            logger.info(f"[schedule/confirm] Parsed userId={user_id}")
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid user ID format")
+        
+        # Get request body
+        body = await request.json()
+        session_id = body.get("session_id")
+        confirm = body.get("confirm", False)
+        logger.info(f"[schedule/confirm] Body sessionId={session_id} confirm={confirm}")
+        
+        if not session_id:
+            raise HTTPException(status_code=400, detail="session_id is required")
+        
+        if not confirm:
+            # Cancel the session
+            logger.info(f"[schedule/confirm] Cancelling session sessionId={session_id}")
+            await scheduling_service.cancel_session(user_id, session_id)
+            response_payload = {
+                "status": "cancelled",
+                "message": "Appointment scheduling cancelled."
+            }
+            logger.info(f"[schedule/confirm] Responding cancelled sessionId={session_id}")
+            return response_payload
+        
+        # Confirm appointment
+        logger.info(f"[schedule/confirm] Confirming appointment sessionId={session_id}")
+        appointment_result = await scheduling_service.confirm_appointment(user_id, session_id)
+        appointment_payload = appointment_result["payload"]
+        appointment_summary = appointment_result["summary"]
+        db_result = appointment_result["db_result"]
+        
+        if db_result["success"]:
+            logger.info(
+                f"[schedule/confirm] Appointment confirmed date={appointment_payload['appointmentDate']} time={appointment_payload['appointmentTime']} duration={appointment_payload.get('appointmentDuration', '')} id={db_result.get('appointment_id')}"
+            )
+            
+            response_payload = {
+                "status": "confirmed",
+                "appointment": {
+                    "id": str(db_result.get("appointment_id", uuid.uuid4())),
+                    "date": appointment_payload["appointmentDate"],
+                    "time": appointment_payload["appointmentTime"],
+                    "reason": appointment_payload.get("reason", ""),
+                    "duration": appointment_payload.get("appointmentDuration", ""),
+                    "notes": appointment_payload.get("reason", "")
+                },
+                "message": "Appointment scheduled successfully!",
+                "summary": appointment_summary
+            }
+        else:
+            logger.error(f"[schedule/confirm] Appointment failed: {db_result.get('error', 'Unknown error')}")
+            
+            response_payload = {
+                "status": "failed",
+                "message": f"Failed to schedule appointment: {db_result.get('error', 'Unknown error')}",
+                "details": db_result.get("message", ""),
+                "summary": appointment_summary
+            }
+        logger.info("[schedule/confirm] Responding confirmed appointment")
+        return response_payload
+        
+    except Exception as e:
+        logger.error(f"Error confirming appointment: {str(e)}")
+        logger.error(traceback.format_exc())
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.post("/schedule/cancel")
+async def cancel_scheduling_session(request: Request):
+    """Cancel a scheduling session"""
+    try:
+        # Get user ID from request headers
+        logger.info("[schedule/cancel] Request received")
+        user_id = request.headers.get("userId")
+        logger.info(f"[schedule/cancel] Headers userId={user_id}")
+        if not user_id:
+            raise HTTPException(status_code=400, detail="userId header is required")
+        
+        try:
+            user_id = int(user_id)
+            logger.info(f"[schedule/cancel] Parsed userId={user_id}")
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid user ID format")
+        
+        # Get request body
+        body = await request.json()
+        session_id = body.get("session_id")
+        logger.info(f"[schedule/cancel] Body sessionId={session_id}")
+        
+        if not session_id:
+            raise HTTPException(status_code=400, detail="session_id is required")
+        
+        # Cancel session
+        logger.info(f"[schedule/cancel] Cancelling session sessionId={session_id}")
+        success = await scheduling_service.cancel_session(user_id, session_id)
+        
+        if success:
+            response_payload = {
+                "status": "cancelled",
+                "message": "Scheduling session cancelled successfully."
+            }
+            logger.info(f"[schedule/cancel] Responding cancelled sessionId={session_id}")
+            return response_payload
+        else:
+            raise HTTPException(status_code=500, detail="Failed to cancel session")
+        
+    except Exception as e:
+        logger.error(f"Error cancelling scheduling session: {str(e)}")
+        logger.error(traceback.format_exc())
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.get("/schedule/status/{user_id}")
+async def get_scheduling_status(user_id: int):
+    """Get the current scheduling status for a user"""
+    try:
+        logger.info(f"[schedule/status] Request received userId={user_id}")
+        session = await scheduling_service.get_current_session(user_id)
+        
+        if not session:
+            response_payload = {
+                "status": "no_active_session",
+                "message": "No active scheduling session found."
+            }
+            logger.info(f"[schedule/status] No active session userId={user_id}")
+            return response_payload
+        
+        if session.status == "ready_for_confirmation":
+            logger.info(f"[schedule/status] Ready for confirmation sessionId={session.session_id}")
+            summary = await scheduling_service.get_session_summary(user_id, session.session_id)
+            response_payload = {
+                "status": "ready_for_confirmation",
+                "session_id": session.session_id,
+                "summary": summary,
+                "message": "Ready to confirm appointment details."
+            }
+            logger.info(f"[schedule/status] Responding confirmation-ready sessionId={session.session_id}")
+            return response_payload
+        else:
+            response_payload = {
+                "status": "in_progress",
+                "session_id": session.session_id,
+                "current_step": session.current_step,
+                "next_question": session.next_question.question if session.next_question else None,
+                "step_type": session.next_question.step_type if session.next_question else None,
+                "options": session.next_question.options if session.next_question else None,
+                "message": "Scheduling session in progress."
+            }
+            logger.info(
+                f"[schedule/status] In progress sessionId={session.session_id} stepType={response_payload['step_type']}"
+            )
+            return response_payload
+        
+    except Exception as e:
+        logger.error(f"Error getting scheduling status: {str(e)}")
+        logger.error(traceback.format_exc())
+        raise HTTPException(status_code=500, detail=str(e))

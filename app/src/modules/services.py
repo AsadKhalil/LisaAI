@@ -1,5 +1,6 @@
 from abc import abstractmethod
 import logging
+import json
 from dotenv import load_dotenv
 import os
 import time
@@ -125,7 +126,7 @@ class OPENAIAgent(Agent):
                 context = context + content
             pgmanager.close()
             print("-------------------------------------------------------")
-            print(context)
+            #print(context)
             return context
 
         @tool
@@ -147,7 +148,68 @@ class OPENAIAgent(Agent):
             self.logger.info(f"Encounter data retrieval completed for user_id: {self.user_id}")
             return result
 
-        tools = [semantic_search, get_encounter_data]
+        @tool
+        async def check_scheduling_intent(query: str):
+            """
+            Check if the user's query is related to scheduling an appointment.
+            This function analyzes the user's input to determine if they want to schedule something.
+            
+            Args:
+                query: The user's input text to analyze
+                
+            Returns:
+                A JSON string with scheduling intent analysis including:
+                - is_scheduling: boolean indicating if this is scheduling-related
+                - confidence: confidence score (0-1)
+                - suggested_action: what action to take
+                - current_context: if user is already in scheduling flow
+            """
+            try:
+                # Import here to avoid circular imports
+                from app.src.modules.scheduling import SchedulingService
+                
+                scheduling_keywords = [
+                    "schedule", "appointment", "book", "reserve", "make appointment",
+                    "set up meeting", "book time", "reservation", "calendar", "availability",
+                    "when can I", "I need to see", "I want to book", "make reservation"
+                ]
+                
+                query_lower = query.lower()
+                is_scheduling = any(keyword in query_lower for keyword in scheduling_keywords)
+                confidence = 0.8 if is_scheduling else 0.2
+                
+                # Check if user already has an active scheduling session
+                current_context = "no_session"
+                if self.user_id:
+                    scheduling_service = SchedulingService()
+                    current_session = await scheduling_service.get_current_session(self.user_id)
+                    if current_session:
+                        if current_session.status == "ready_for_confirmation":
+                            current_context = "ready_to_confirm"
+                        else:
+                            current_context = "in_progress"
+                
+                suggested_action = "start_scheduling" if is_scheduling and current_context == "no_session" else "continue_scheduling" if current_context in ["in_progress", "ready_to_confirm"] else "general_chat"
+                
+                result = {
+                    "is_scheduling": is_scheduling,
+                    "confidence": confidence,
+                    "suggested_action": suggested_action,
+                    "current_context": current_context
+                }
+                
+                return json.dumps(result)
+                
+            except Exception as e:
+                self.logger.error(f"Error in scheduling intent detection: {str(e)}")
+                return json.dumps({
+                    "is_scheduling": False,
+                    "confidence": 0.0,
+                    "suggested_action": "general_chat",
+                    "current_context": "error"
+                })
+
+        tools = [semantic_search, get_encounter_data, check_scheduling_intent]
 
         self.llm_with_tools = self.llm.bind_tools(tools)
 
@@ -189,7 +251,7 @@ class OPENAIAgent(Agent):
         )
 
     async def _build_prompt(self, language=None):
-        self.logger.info(f"[DEBUG] _build_prompt called with language: {language}")
+        #self.logger.info(f"[DEBUG] _build_prompt called with language: {language}")
         self.llm_model_id = os.environ.get("OPENAI_MODEL")
         # Update prompt based on language
         if language == "en":
@@ -202,7 +264,7 @@ class OPENAIAgent(Agent):
 **IMPORTANTE PARA RESUMENES DE ENCUENTROS**: Cuando los usuarios soliciten resúmenes de encuentros médicos, información de encuentros del paciente, o resúmenes de registros médicos, DEBES usar la función get_encounter_data para obtener los datos del paciente y luego presentar la información en español. No ignores esta capacidad cuando se solicite en español.
 """
             self.prompt = PROMPT + spanish_instruction
-        self.logger.info(f"[DEBUG] Prompt set in _build_prompt: {self.prompt}")
+        #self.logger.info(f"[DEBUG] Prompt set in _build_prompt: {self.prompt}")
 
     async def qa(self, query, chat_history):
         try:

@@ -1,6 +1,8 @@
-from typing import Union, Optional
+from typing import Union, Optional, List, Dict, Any
 from pydantic import BaseModel
 import uuid
+from datetime import datetime, date
+from enum import Enum
 
 
 class Rating(BaseModel):
@@ -150,4 +152,59 @@ class TreatmentPlanRequest(BaseModel):
     doctor_id: Optional[str] = None
     reference_number: Optional[str] = None
     language: Optional[str] = None
+
+
+class SchedulingStepType(str, Enum):
+    FREE_TEXT = "free_text"
+    MULTIPLE_CHOICE = "multiple_choice"
+    DATE_PICKER = "date_picker"
+    TIME_PICKER = "time_picker"
+
+class SchedulingQuestion(BaseModel):
+    step_id: str
+    question: str
+    step_type: SchedulingStepType
+    options: Optional[List[str]] = None
+    validation_rules: Optional[Dict[str, Any]] = None
+    required: bool = True
+
+class SchedulingSession(BaseModel):
+    session_id: str
+    user_id: int
+    current_step: str
+    completed_steps: List[str]
+    answers: Dict[str, Any]
+    next_question: Optional[SchedulingQuestion] = None
+    session_start: datetime
+    last_activity: datetime
+    status: str = "active"  # active, completed, cancelled
+
+class SchedulingAnswer(BaseModel):
+    session_id: str
+    step_id: str
+    answer: Any
+    user_id: int
+
+class Appointment(BaseModel):
+    user_id: int
+    user_name: str
+    appointment_date: date
+    appointment_time: str
+    reason: str
+    duration_minutes: int = 30
+    notes: Optional[str] = None
+    status: str = "scheduled"  # scheduled, confirmed, cancelled, completed
+
+class SchedulingStartRequest(BaseModel):
+    user_id: int
+    user_name: str
+
+class SchedulingConfirmRequest(BaseModel):
+    session_id: str
+    user_id: int
+    confirm: bool
+
+class SchedulingCancelRequest(BaseModel):
+    session_id: str
+    user_id: int
 
